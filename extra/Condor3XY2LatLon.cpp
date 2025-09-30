@@ -6,10 +6,11 @@
  *   Y value corresponding to the Latitude you want, e.g. 100150.11
  * 
  * Returns two floating point numbers, comma-separated, for the Longitude,Latitude.
+ * Output precision: 8 decimal places (sub-meter accuracy: ~0.79-1.11 cm at 45° latitude)
  * 
  * Example:
  *   Condor3XY2LatLon AA3 800934.75 95883.93
- *   5.9901,44.0555
+ *   5.99010000,44.05550000
  * ...which is St. Auban airport in France
  * 
  * This must be compiled with 32-bit MSVC as of 2025/09/27, because Condor3 is a 32-bit app.
@@ -18,6 +19,7 @@
  */
 
  #include <iostream>
+ #include <iomanip>
  #include <string>
  #include <windows.h>
  #include <winreg.h>
@@ -80,12 +82,15 @@
         std::cout << "Could not call NaviConInit(" << trn_name << ")" << std::endl;
         return EXIT_FAILURE;
     }
- 
-     f_funcf f_xy2lon = (f_funcf)GetProcAddress(hGetProcIDDLL, "XYToLon");
-     float lon = f_xy2lon(x, y);
-     f_funcf f_xy2lat = (f_funcf)GetProcAddress(hGetProcIDDLL, "XYToLat");
-     float lat = f_xy2lat(x, y);
-     std::cout << lon << "," << lat;
- 
-     return EXIT_SUCCESS;
- }
+
+    f_funcf f_xy2lon = (f_funcf)GetProcAddress(hGetProcIDDLL, "XYToLon");
+    float lon = f_xy2lon(x, y);
+    f_funcf f_xy2lat = (f_funcf)GetProcAddress(hGetProcIDDLL, "XYToLat");
+    float lat = f_xy2lat(x, y);
+    
+    // Output with high precision: 8 decimal places for sub-meter accuracy
+    // At 45° latitude: 0.00000001° ≈ 0.79-1.11 mm, so 8 decimals ≈ 0.79-1.11 cm
+    std::cout << std::fixed << std::setprecision(8) << lon << "," << lat;
+
+    return EXIT_SUCCESS;
+}

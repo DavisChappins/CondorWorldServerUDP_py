@@ -26,7 +26,7 @@ A Python tool to sniff, decode, and log UDP traffic from Condor (port 56298 by d
 - `navicon_bridge.py` — calls 32-bit NaviCon via helper EXE & `AA3.trn`.
 - `replay_hex_log.py` — offline parser for hex-only logs (uses legacy parser in `scapy_udp_56298_14.py`).
 - `scapy_udp_56298_*.py` — prior analysis scripts and parsers.
-- `AA3.trn` — terrain resource for NaviCon (keep in repo root).
+- `AA3.trn` — terrain resource for NaviCon (keep in repo root). found in landscapes folder not in github
 - `Condor3XY2LatLon.exe` — helper executable used by `navicon_bridge.py`.
 - `extra/` — utilities and experiments (including a separate README).
 - `requirements.txt` — Python dependencies for core tools.
@@ -35,7 +35,7 @@ A Python tool to sniff, decode, and log UDP traffic from Condor (port 56298 by d
 
 - **Python**: 3.9+
 - **Windows** with **Npcap** installed (Scapy uses Npcap/WinPcap for sniffing)
-- **Administrator privileges** to capture packets
+- **Administrator privileges** (maybe) to capture packets
 - **Python packages** (install via `requirements.txt`):
   - `scapy`
   - `numpy` (for `aa3_converter.py` fallback conversion)

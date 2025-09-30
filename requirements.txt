@@ -1,2 +1,4 @@
 scapy>=2.5.0
 numpy>=1.24
+Flask>=3.0
+requests>=2.31
