@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+import datetime
+import math
+import struct
+from scapy.all import sniff, UDP
+
+# The UDP port the game is using
+SNIFF_PORT = 56298
+
+# Global file handler for logging
+LOG_FILE = None
+
+
+def decode_3d00_payload(payload_hex: str) -> dict:
+    """Decode a 0x3d00 telemetry payload into useful fields."""
+    b = bytes.fromhex(payload_hex)
+    words = [b[i:i+4] for i in range(0, len(b), 4) if len(b[i:i+4]) == 4]
+    floats = [struct.unpack("<f", w)[0] for w in words]
+    u32s = [int.from_bytes(w, "little") for w in words]
+
+    # Best-guess field mapping
+    pos_x, pos_y = floats[2], floats[3]
+    heading_raw = floats[4]
+    heading = (heading_raw % 360.0 + 360.0) % 360.0
+
+    vx, vy, vz = floats[10], floats[11], floats[12]
+    speed_mps = math.sqrt(vx * vx + vy * vy + vz * vz)
+    speed_kt = speed_mps * 1.9438445
+    vario_mps = vz
+    vario_fpm = vario_mps * 196.850394
+
+    ax, ay, az = floats[13], floats[14], floats[15]
+    a_mag = math.sqrt(ax * ax + ay * ay + az * az)
+
+    tail = u32s[-6:]
+
+    return {
+        "pos_x": pos_x,
+        "pos_y": pos_y,
+        "heading_deg": heading,
+        "vx": vx,
+        "vy": vy,
+        "vz": vz,
+        "speed_mps": speed_mps,
+        "speed_kt": speed_kt,
+        "vario_mps": vario_mps,
+        "vario_fpm": vario_fpm,
+        "ax": ax,
+        "ay": ay,
+        "az": az,
+        "a_mag": a_mag,
+        "tail": tail,
+    }
+
+
+def parse_telemetry_packet(hex_data: str) -> str:
+    """Decodes telemetry packets (0x3d00 and friends)."""
+    try:
+        msg_type = hex_data[0:4]
+
+        # Extract CN and ID
+        cn_bytes = bytes.fromhex(hex_data[4:8])
+        cn_decimal = int.from_bytes(cn_bytes, "little")
+
+        id_bytes = bytes.fromhex(hex_data[8:16])
+        id_decimal = int.from_bytes(id_bytes, "little")
+
+        payload_hex = hex_data[16:]
+
+        if msg_type == "3d00":
+            decoded = decode_3d00_payload(payload_hex)
+            output = (
+                f"[+] TELEMETRY PACKET DETECTED\n"
+                f"    - Message Type: 0x{msg_type}\n"
+                f"    - Counter (CN): {cn_decimal}\n"
+                f"    - Identifier (ID): {id_decimal}\n"
+                f"    - Full HEX: {hex_data}\n"  # <-- ADDED THIS LINE
+                f"    - pos_x: {decoded['pos_x']:.1f}, pos_y: {decoded['pos_y']:.1f}\n"
+                f"    - Heading: {decoded['heading_deg']:.1f}°\n"
+                f"    - Speed: {decoded['speed_mps']:.2f} m/s ({decoded['speed_kt']:.1f} kt)\n"
+                f"    - Vario: {decoded['vario_mps']:.2f} m/s ({decoded['vario_fpm']:.0f} fpm)\n"
+                f"    - Accel: ({decoded['ax']:.2f}, {decoded['ay']:.2f}, {decoded['az']:.2f}), |a|={decoded['a_mag']:.2f}\n"
+                f"    - Tail u32: {decoded['tail']}"
+            )
+        else:
+            # for 0x3900, 0x3100 etc. we just dump payload for now
+            output = (
+                f"[+] TELEMETRY PACKET DETECTED\n"
+                f"    - Message Type: 0x{msg_type}\n"
+                f"    - Counter (CN): {cn_decimal}\n"
+                f"    - Identifier (ID): {id_decimal}\n"
+                f"    - Full HEX: {hex_data}" # <-- MODIFIED THIS LINE
+            )
+
+        return output
+
+    except Exception as e:
+        return f"[!] Error parsing Telemetry packet: {e}\n    HEX: {hex_data}"
+
+
+def parse_ack_packet(hex_data: str) -> str:
+    """Decodes the short acknowledgement packets."""
+    try:
+        msg_type = hex_data[0:8]
+
+        ack_cn_bytes = bytes.fromhex(hex_data[8:12])
+        ack_cn_decimal = int.from_bytes(ack_cn_bytes, "little")
+
+        payload_hex = hex_data[12:] # Corrected offset for ACK payload
+
+        output = (
+            f"[<] ACKNOWLEDGEMENT PACKET DETECTED\n"
+            f"    - Message Type: 0x{msg_type}\n"
+            f"    - Acknowledged CN: {ack_cn_decimal}\n"
+            f"    - Full HEX: {hex_data}\n" # <-- ADDED THIS LINE
+            f"    - Payload HEX: {payload_hex}"
+        )
+        return output
+    except Exception as e:
+        return f"[!] Error parsing ACK packet: {e}\n    HEX: {hex_data}"
+
+
+def packet_handler(packet):
+    """Main handler function for processing each captured packet."""
+    if UDP not in packet or packet[UDP].dport != SNIFF_PORT:
+        return
+
+    payload = packet[UDP].payload.original
+    hex_data = payload.hex()
+
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    parsed_output = "" # Initialize empty
+
+    if hex_data.startswith(("3d00", "3900", "3100")):
+        parsed_output = parse_telemetry_packet(hex_data)
+    elif hex_data.startswith("8006"):
+        parsed_output = parse_ack_packet(hex_data)
+    else:
+        # Catch-all for any other packet types on this port
+        parsed_output = f"[?] UNKNOWN PACKET TYPE\n    - Full HEX: {hex_data}"
+
+    final_output = f"[{timestamp}] {parsed_output}"
+
+    print(final_output)
+    print("-" * 60)
+
+    if LOG_FILE:
+        LOG_FILE.write(final_output + "\n")
+        LOG_FILE.flush()
+
+
+def main():
+    """Sets up logging and starts the packet sniffer."""
+    global LOG_FILE
+    log_filename = f"udp_sniff_log_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+
+    try:
+        with open(log_filename, "w") as f:
+            LOG_FILE = f # Assign file object to global variable
+            print(f"[*] Starting UDP packet sniffer on port {SNIFF_PORT}")
+            print(f"[*] Logging to file: {log_filename}")
+            print("=" * 60)
+
+            bpf_filter = f"udp and port {SNIFF_PORT}"
+            sniff(filter=bpf_filter, prn=packet_handler, store=0)
+
+    except PermissionError:
+        print("\n[!] PERMISSION ERROR: Please run this script with administrator/root privileges.")
+    except Exception as e:
+        print(f"\n[!] An error occurred: {e}")
+
+
+if __name__ == "__main__":
+    main()
