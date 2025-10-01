@@ -53,116 +53,129 @@ def _prune_stale() -> None:
         POSITIONS.pop(k, None)
 
 
-@app.route("/api/position", methods=["POST"])
-def api_position() -> Response:
+@app.route("/api/positions", methods=["POST"])
+def api_positions_post() -> Response:
     data = request.get_json(silent=True, force=False)
-    if not isinstance(data, dict):
+    
+    # Accept both single object and array
+    if isinstance(data, dict):
+        positions = [data]
+    elif isinstance(data, list):
+        positions = data
+    else:
         return jsonify({"error": "invalid JSON body"}), 400
-
-    glider_id = data.get("id")
-    if glider_id is None:
-        return jsonify({"error": "missing id"}), 400
-    glider_id = str(glider_id)
-
-    raw_lat = data.get("lat")
-    raw_lon = data.get("lon")
-    lat_f = _coerce_float(raw_lat)
-    lon_f = _coerce_float(raw_lon)
-
-    if lat_f is None or lon_f is None:
-        return jsonify({"error": "missing/invalid lat/lon"}), 400
-
-    # Clamp to reasonable ranges
-    lat_f = max(-90.0, min(90.0, lat_f))
-    # Normalize lon into [-180, 180]
-    lon_f = ((lon_f + 180.0) % 360.0) - 180.0
-
-    # Store as floats to preserve numeric precision and consistency
-    lat = lat_f
-    lon = lon_f
-
-    alt_m = _coerce_float(data.get("alt_m"))
-    if alt_m is None:
-        # accept alternate field name for convenience
-        alt_m = _coerce_float(data.get("altitude_m"))
-
-    heading_deg = _coerce_float(data.get("heading_deg"))
-    if heading_deg is None:
-        heading_deg = _coerce_float(data.get("heading"))
-    if heading_deg is not None:
-        heading_deg = (heading_deg % 360.0 + 360.0) % 360.0
-
-    speed_mps = _coerce_float(data.get("speed_mps"))
-    vario_mps = _coerce_float(data.get("vario_mps"))
-
-    # Round for storage and downstream responses
-    if alt_m is not None:
-        alt_m = round(alt_m, 1)
-    if heading_deg is not None:
-        heading_deg = int(round(heading_deg))
-    if speed_mps is not None:
-        speed_mps = round(speed_mps, 2)
-    if vario_mps is not None:
-        vario_mps = round(vario_mps, 3)
-
-    identity = (data.get("identity") or "").strip()
-    aircraft = (data.get("aircraft") or "").strip()
-    timestamp_client = (data.get("timestamp") or "").strip()
     
-    # Extract individual identity fields
-    id_aircraft = (data.get("id_aircraft") or "").strip()
-    id_cn = (data.get("id_cn") or "").strip()
-    id_reg = (data.get("id_reg") or "").strip()
-    id_fname = (data.get("id_fname") or "").strip()
-    id_lname = (data.get("id_lname") or "").strip()
-    id_country = (data.get("id_country") or "").strip()
+    for pos_data in positions:
+        if not isinstance(pos_data, dict):
+            continue
+        
+        # Use cookie as the unique identifier (not id, which can be shared)
+        cookie = pos_data.get("cookie")
+        if cookie is None:
+            continue
+        glider_id = str(cookie)
 
-    now_iso = _now_iso_utc()
-    now_ts = time.time()
+        raw_lat = pos_data.get("lat")
+        raw_lon = pos_data.get("lon")
+        lat_f = _coerce_float(raw_lat)
+        lon_f = _coerce_float(raw_lon)
 
-    record = {
-        "id": glider_id,
-        "lat": lat,
-        "lon": lon,
-        "updated_at": now_iso,
-        "updated_ts": now_ts,
-    }
-    if timestamp_client:
-        record["timestamp"] = timestamp_client
-    if alt_m is not None:
-        record["alt_m"] = alt_m
-    if heading_deg is not None:
-        record["heading_deg"] = heading_deg
-    if speed_mps is not None:
-        record["speed_mps"] = speed_mps
-    if vario_mps is not None:
-        record["vario_mps"] = vario_mps
-    if identity:
-        record["identity"] = identity
-    if aircraft:
-        record["aircraft"] = aircraft
-    if id_aircraft:
-        record["id_aircraft"] = id_aircraft
-    if id_cn:
-        record["id_cn"] = id_cn
-    if id_reg:
-        record["id_reg"] = id_reg
-    if id_fname:
-        record["id_fname"] = id_fname
-    if id_lname:
-        record["id_lname"] = id_lname
-    if id_country:
-        record["id_country"] = id_country
+        if lat_f is None or lon_f is None:
+            continue
 
-    if glider_id not in POSITIONS:
-        POSITIONS[glider_id] = []
-    
-    trail = POSITIONS[glider_id]
-    trail.append(record)
+        # Clamp to reasonable ranges
+        lat_f = max(-90.0, min(90.0, lat_f))
+        # Normalize lon into [-180, 180]
+        lon_f = ((lon_f + 180.0) % 360.0) - 180.0
 
-    # Keep trail length at max TRAIL_MAX_POINTS
-    if len(trail) > TRAIL_MAX_POINTS:
-        POSITIONS[glider_id] = trail[-TRAIL_MAX_POINTS:]
+        # Store as floats to preserve numeric precision and consistency
+        lat = lat_f
+        lon = lon_f
+
+        alt_m = _coerce_float(pos_data.get("alt_m"))
+        if alt_m is None:
+            # accept alternate field name for convenience
+            alt_m = _coerce_float(pos_data.get("altitude_m"))
+
+        heading_deg = _coerce_float(pos_data.get("heading_deg"))
+        if heading_deg is None:
+            heading_deg = _coerce_float(pos_data.get("heading"))
+        if heading_deg is not None:
+            heading_deg = (heading_deg % 360.0 + 360.0) % 360.0
+
+        speed_mps = _coerce_float(pos_data.get("speed_mps"))
+        vario_mps = _coerce_float(pos_data.get("vario_mps"))
+
+        # Round for storage and downstream responses
+        if alt_m is not None:
+            alt_m = round(alt_m, 1)
+        if heading_deg is not None:
+            heading_deg = int(round(heading_deg))
+        if speed_mps is not None:
+            speed_mps = round(speed_mps, 2)
+        if vario_mps is not None:
+            vario_mps = round(vario_mps, 3)
+
+        identity = (pos_data.get("identity") or "").strip()
+        aircraft = (pos_data.get("aircraft") or "").strip()
+        timestamp_client = (pos_data.get("timestamp") or "").strip()
+        
+        # Extract individual identity fields
+        id_aircraft = (pos_data.get("id_aircraft") or "").strip()
+        id_cn = (pos_data.get("id_cn") or "").strip()
+        id_reg = (pos_data.get("id_reg") or "").strip()
+        id_fname = (pos_data.get("id_fname") or "").strip()
+        id_lname = (pos_data.get("id_lname") or "").strip()
+        id_country = (pos_data.get("id_country") or "").strip()
+
+        now_iso = _now_iso_utc()
+        now_ts = time.time()
+
+        record = {
+            "id": glider_id,  # This is now the cookie
+            "cookie": cookie,
+            "entity_id": pos_data.get("id"),  # Store the original id as entity_id
+            "lat": lat,
+            "lon": lon,
+            "updated_at": now_iso,
+            "updated_ts": now_ts,
+        }
+        if timestamp_client:
+            record["timestamp"] = timestamp_client
+        if alt_m is not None:
+            record["alt_m"] = alt_m
+        if heading_deg is not None:
+            record["heading_deg"] = heading_deg
+        if speed_mps is not None:
+            record["speed_mps"] = speed_mps
+        if vario_mps is not None:
+            record["vario_mps"] = vario_mps
+        if identity:
+            record["identity"] = identity
+        if aircraft:
+            record["aircraft"] = aircraft
+        if id_aircraft:
+            record["id_aircraft"] = id_aircraft
+        if id_cn:
+            record["id_cn"] = id_cn
+        if id_reg:
+            record["id_reg"] = id_reg
+        if id_fname:
+            record["id_fname"] = id_fname
+        if id_lname:
+            record["id_lname"] = id_lname
+        if id_country:
+            record["id_country"] = id_country
+
+        if glider_id not in POSITIONS:
+            POSITIONS[glider_id] = []
+        
+        trail = POSITIONS[glider_id]
+        trail.append(record)
+
+        # Keep trail length at max TRAIL_MAX_POINTS
+        if len(trail) > TRAIL_MAX_POINTS:
+            POSITIONS[glider_id] = trail[-TRAIL_MAX_POINTS:]
 
     return ("", 204)
 
@@ -277,11 +290,12 @@ INDEX_HTML = """
 
       function popupHtml(rec) {
         const id = rec.id || 'unknown';
+        const entity_id = rec.entity_id ? ` (Entity: ${rec.entity_id})` : '';
         const ident = rec.identity ? ` - ${rec.identity}` : '';
         const ac = rec.aircraft ? `<div>Aircraft: ${rec.aircraft}</div>` : '';
         const ts = rec.updated_at ? new Date(rec.updated_at).toLocaleTimeString() : '';
         return `
-          <div><b>${id}</b>${ident}</div>
+          <div><b>Cookie: ${id}</b>${entity_id}${ident}</div>
           <div>Lat/Lon: ${rec.lat}, ${rec.lon}</div>
           <div>Alt: ${fmtAlt(rec.alt_m)} | Speed: ${fmtSpd(rec.speed_mps)} | Hdg: ${fmtHdg(rec.heading_deg)} | Vario: ${fmtVario(rec.vario_mps)}</div>
           ${ac}

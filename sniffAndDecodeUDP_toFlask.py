@@ -16,7 +16,7 @@ except Exception:
     navicon_bridge = None
 
 # The UDP port the game is using
-SNIFF_PORT = 56298
+SNIFF_PORT = 56288
 
 # Standard gravity for G-force calculation
 GRAVITY_MS2 = 9.80665
@@ -35,7 +35,7 @@ ENTITY_TO_COOKIE = {}    # entity_id (int) -> cookie (int)
 
 
 # Flask telemetry forwarding configuration
-DEFAULT_FLASK_ENDPOINT = "http://127.0.0.1:5000/api/position"
+DEFAULT_FLASK_ENDPOINT = "http://127.0.0.1:5000/api/positions"
 FLASK_ENDPOINT = (os.getenv("FLASK_ENDPOINT", DEFAULT_FLASK_ENDPOINT) or "").strip()
 try:
     FLASK_TIMEOUT = float(os.getenv("FLASK_TIMEOUT", "0.3"))
@@ -43,6 +43,12 @@ except ValueError:
     FLASK_TIMEOUT = 0.3
 REQUEST_SESSION = None
 FLASK_POST_FAILURES = 0
+
+# Batch positions by cookie before sending
+import time as time_module
+POSITION_BATCH = {}  # cookie -> latest position dict
+LAST_BATCH_SEND = 0
+BATCH_INTERVAL = 0.5  # Send batch every 0.5 seconds
 
 
 # ------------------------
@@ -64,22 +70,15 @@ FPL_STATE = {
 
 
 def send_position_to_flask(payload: dict) -> None:
-    """Send latest telemetry to the configured Flask endpoint."""
-    global REQUEST_SESSION, FLASK_POST_FAILURES
+    """Add position to batch for sending to Flask endpoint."""
+    global POSITION_BATCH, LAST_BATCH_SEND
     if not FLASK_ENDPOINT:
         return
     if requests is None:
-        if FLASK_POST_FAILURES == 0:
-            msg = "[!] requests library is not available; skipping Flask forwarding."
-            print(msg)
-            if LOG_FILE:
-                LOG_FILE.write(msg + "\n")
-                LOG_FILE.flush()
-        FLASK_POST_FAILURES += 1
         return
 
-    glider_id = payload.get("id")
-    if glider_id is None:
+    cookie = payload.get("cookie")
+    if cookie is None:
         return
 
     def _coerce_float(value):
@@ -97,7 +96,7 @@ def send_position_to_flask(payload: dict) -> None:
         return
 
     payload_to_send = dict(payload)
-    payload_to_send["id"] = str(glider_id)
+    payload_to_send["cookie"] = cookie
     payload_to_send["lat"] = lat_f
     payload_to_send["lon"] = lon_f
 
@@ -125,14 +124,46 @@ def send_position_to_flask(payload: dict) -> None:
 
     payload_to_send.setdefault("timestamp", datetime.datetime.utcnow().isoformat() + "Z")
 
+    # Store in batch by cookie (overwrites previous position for same cookie)
+    POSITION_BATCH[cookie] = payload_to_send
+    
+    # Check if it's time to send the batch
+    now = time_module.time()
+    if now - LAST_BATCH_SEND >= BATCH_INTERVAL:
+        flush_position_batch()
+        LAST_BATCH_SEND = now
+
+
+def flush_position_batch() -> None:
+    """Send all batched positions to Flask as an array."""
+    global REQUEST_SESSION, FLASK_POST_FAILURES, POSITION_BATCH
+    
+    if not POSITION_BATCH:
+        return
+    
+    if requests is None:
+        if FLASK_POST_FAILURES == 0:
+            msg = "[!] requests library is not available; skipping Flask forwarding."
+            print(msg)
+            if LOG_FILE:
+                LOG_FILE.write(msg + "\n")
+                LOG_FILE.flush()
+        FLASK_POST_FAILURES += 1
+        return
+    
+    # Convert batch dict to array
+    positions_array = list(POSITION_BATCH.values())
+    
     try:
         if REQUEST_SESSION is None:
             REQUEST_SESSION = requests.Session()
-        REQUEST_SESSION.post(FLASK_ENDPOINT, json=payload_to_send, timeout=FLASK_TIMEOUT)
+        REQUEST_SESSION.post(FLASK_ENDPOINT, json=positions_array, timeout=FLASK_TIMEOUT)
+        # Clear batch after successful send
+        POSITION_BATCH.clear()
     except Exception as exc:
         FLASK_POST_FAILURES += 1
         if FLASK_POST_FAILURES < 5 or FLASK_POST_FAILURES % 25 == 0:
-            msg = f"[!] Failed to POST telemetry to Flask endpoint ({FLASK_ENDPOINT}): {exc}"
+            msg = f"[!] Failed to POST telemetry batch to Flask endpoint ({FLASK_ENDPOINT}): {exc}"
             print(msg)
             if LOG_FILE:
                 LOG_FILE.write(msg + "\n")
