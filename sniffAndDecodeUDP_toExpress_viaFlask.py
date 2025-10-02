@@ -47,6 +47,12 @@ except ValueError:
 REQUEST_SESSION = None
 EXPRESS_POST_FAILURES = 0
 
+# Remote server forwarding configuration
+REMOTE_SERVER_ENDPOINT = "https://server.condormap.com/api/positions"
+REMOTE_SESSION = None
+REMOTE_POST_FAILURES = 0
+REMOTE_VERIFY_SSL = False  # Set to True if you have valid SSL certificate
+
 # Batch positions by cookie before sending
 import time as time_module
 POSITION_BATCH = {}  # cookie -> latest position dict
@@ -138,8 +144,9 @@ def send_position_to_express(payload: dict) -> None:
 
 
 def flush_position_batch() -> None:
-    """Send all batched positions to Express.js as an array."""
+    """Send all batched positions to Express.js and remote server as an array."""
     global REQUEST_SESSION, EXPRESS_POST_FAILURES, POSITION_BATCH, SERVER_NAME, SNIFF_PORT
+    global REMOTE_SESSION, REMOTE_POST_FAILURES
     
     if not POSITION_BATCH:
         return
@@ -157,6 +164,7 @@ def flush_position_batch() -> None:
         "X-Port-Number": str(SNIFF_PORT)
     }
     
+    # Send to local Express.js endpoint
     try:
         if REQUEST_SESSION is None:
             REQUEST_SESSION = requests.Session()
@@ -166,6 +174,22 @@ def flush_position_batch() -> None:
     except Exception as exc:
         EXPRESS_POST_FAILURES += 1
         # Silent mode - no error output for performance
+    
+    # Also send to remote server (non-blocking, fire and forget)
+    try:
+        if REMOTE_SESSION is None:
+            REMOTE_SESSION = requests.Session()
+            # Disable SSL warnings if verification is disabled
+            if not REMOTE_VERIFY_SSL:
+                import urllib3
+                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        REMOTE_SESSION.post(REMOTE_SERVER_ENDPOINT, json=positions_array, headers=headers, 
+                          timeout=EXPRESS_TIMEOUT, verify=REMOTE_VERIFY_SSL)
+    except Exception as exc:
+        REMOTE_POST_FAILURES += 1
+        # Log first few failures for debugging
+        if REMOTE_POST_FAILURES <= 3:
+            print(f"[!] Remote server POST failed: {exc}")
 
 def decode_3d00_payload(payload_hex: str) -> dict:
     """Decode a 0x3d00 telemetry payload into useful fields."""
