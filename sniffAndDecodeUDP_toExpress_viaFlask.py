@@ -15,6 +15,8 @@ try:
     import navicon_bridge  # Out-of-process 32-bit DLL bridge
 except Exception:
     navicon_bridge = None
+import threading
+import queue
 
 # The UDP port the game is using (will be set via CLI argument)
 SNIFF_PORT = 56288
@@ -24,7 +26,7 @@ LANDSCAPE_TRN_PATH = None  # Will be set based on --landscape argument
 # Standard gravity for G-force calculation
 GRAVITY_MS2 = 9.80665
 
-# Global file handlers for logging
+# Global file handlers for logging - DISABLED FOR PERFORMANCE
 
 LOG_FILE = None
 HEX_LOG_3F_FILE = None
@@ -38,7 +40,7 @@ ENTITY_TO_COOKIE = {}    # entity_id (int) -> cookie (int)
 
 
 # Express.js telemetry forwarding configuration
-DEFAULT_EXPRESS_ENDPOINT = "http://127.0.0.1:3000/api/positions"
+DEFAULT_EXPRESS_ENDPOINT = "https://server.condormap.com/api/positions"
 EXPRESS_ENDPOINT = (os.getenv("EXPRESS_ENDPOINT", DEFAULT_EXPRESS_ENDPOINT) or "").strip()
 try:
     EXPRESS_TIMEOUT = float(os.getenv("EXPRESS_TIMEOUT", "0.3"))
@@ -46,18 +48,25 @@ except ValueError:
     EXPRESS_TIMEOUT = 0.3
 REQUEST_SESSION = None
 EXPRESS_POST_FAILURES = 0
+EXPRESS_VERIFY_SSL = False  # Set to True if you have valid SSL certificate
 
-# Remote server forwarding configuration
-REMOTE_SERVER_ENDPOINT = "https://server.condormap.com/api/positions"
+# Remote server forwarding configuration (secondary/backup endpoint)
+REMOTE_SERVER_ENDPOINT = ""  # Optional secondary endpoint
 REMOTE_SESSION = None
 REMOTE_POST_FAILURES = 0
 REMOTE_VERIFY_SSL = False  # Set to True if you have valid SSL certificate
 
-# Batch positions by cookie before sending
+# Async HTTP request queue for non-blocking position sending
 import time as time_module
-POSITION_BATCH = {}  # cookie -> latest position dict
-LAST_BATCH_SEND = 0
-BATCH_INTERVAL = 1.0  # Send batch every 1.0 seconds (1Hz max)
+POSITION_QUEUE = queue.Queue(maxsize=10000)  # Queue for positions to send
+HTTP_WORKER_THREAD = None
+HTTP_WORKER_RUNNING = False
+
+# Performance monitoring
+POSITIONS_QUEUED = 0
+POSITIONS_SENT = 0
+LAST_STATS_PRINT = 0
+STATS_PRINT_INTERVAL = 5.0  # Print stats every 5 seconds
 
 
 # ------------------------
@@ -79,8 +88,7 @@ FPL_STATE = {
 
 
 def send_position_to_express(payload: dict) -> None:
-    """Add position to batch for sending to Express.js endpoint."""
-    global POSITION_BATCH, LAST_BATCH_SEND
+    """Queue position for async sending to Express.js endpoint."""
     if not EXPRESS_ENDPOINT:
         return
     if requests is None:
@@ -131,32 +139,47 @@ def send_position_to_express(payload: dict) -> None:
     if vario_f is not None:
         payload_to_send["vario_mps"] = vario_f
 
-    payload_to_send.setdefault("timestamp", datetime.datetime.utcnow().isoformat() + "Z")
+    # DO NOT timestamp here - will be timestamped at send time for accuracy
+    # payload_to_send.setdefault("timestamp", datetime.datetime.utcnow().isoformat() + "Z")
 
-    # Store in batch by cookie (overwrites previous position for same cookie)
-    POSITION_BATCH[cookie] = payload_to_send
-    
-    # Check if it's time to send the batch
-    now = time_module.time()
-    if now - LAST_BATCH_SEND >= BATCH_INTERVAL:
-        flush_position_batch()
-        LAST_BATCH_SEND = now
+    # Queue position for async sending (non-blocking)
+    global POSITIONS_QUEUED
+    try:
+        POSITION_QUEUE.put_nowait(payload_to_send)
+        POSITIONS_QUEUED += 1
+    except queue.Full:
+        # Queue full - drop oldest or skip (fail silently for performance)
+        print(f"[!] WARNING: Position queue FULL ({POSITION_QUEUE.maxsize}), dropping position for cookie {cookie}")
+        pass
 
 
-def flush_position_batch() -> None:
-    """Send all batched positions to Express.js and remote server as an array."""
-    global REQUEST_SESSION, EXPRESS_POST_FAILURES, POSITION_BATCH, SERVER_NAME, SNIFF_PORT
-    global REMOTE_SESSION, REMOTE_POST_FAILURES
-    
-    if not POSITION_BATCH:
-        return
+def http_worker_thread() -> None:
+    """Background thread that sends positions from queue to HTTP endpoints."""
+    global REQUEST_SESSION, EXPRESS_POST_FAILURES, SERVER_NAME, SNIFF_PORT
+    global REMOTE_SESSION, REMOTE_POST_FAILURES, HTTP_WORKER_RUNNING
+    global POSITIONS_SENT, LAST_STATS_PRINT
     
     if requests is None:
-        EXPRESS_POST_FAILURES += 1
+        print("[!] ERROR: requests module not available, HTTP worker cannot start")
         return
     
-    # Convert batch dict to array
-    positions_array = list(POSITION_BATCH.values())
+    print(f"[+] HTTP worker thread started")
+    print(f"[+] Primary endpoint: {EXPRESS_ENDPOINT}")
+    if REMOTE_SERVER_ENDPOINT:
+        print(f"[+] Backup endpoint: {REMOTE_SERVER_ENDPOINT}")
+    
+    # Initialize sessions
+    REQUEST_SESSION = requests.Session()
+    if REMOTE_SERVER_ENDPOINT:
+        REMOTE_SESSION = requests.Session()
+    
+    # Disable SSL warnings if verification is disabled
+    if not EXPRESS_VERIFY_SSL or not REMOTE_VERIFY_SSL:
+        try:
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        except Exception:
+            pass
     
     # Prepare custom headers with server identification
     headers = {
@@ -164,32 +187,50 @@ def flush_position_batch() -> None:
         "X-Port-Number": str(SNIFF_PORT)
     }
     
-    # Send to local Express.js endpoint
-    try:
-        if REQUEST_SESSION is None:
-            REQUEST_SESSION = requests.Session()
-        REQUEST_SESSION.post(EXPRESS_ENDPOINT, json=positions_array, headers=headers, timeout=EXPRESS_TIMEOUT)
-        # Clear batch after successful send
-        POSITION_BATCH.clear()
-    except Exception as exc:
-        EXPRESS_POST_FAILURES += 1
-        # Silent mode - no error output for performance
-    
-    # Also send to remote server (non-blocking, fire and forget)
-    try:
-        if REMOTE_SESSION is None:
-            REMOTE_SESSION = requests.Session()
-            # Disable SSL warnings if verification is disabled
-            if not REMOTE_VERIFY_SSL:
-                import urllib3
-                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        REMOTE_SESSION.post(REMOTE_SERVER_ENDPOINT, json=positions_array, headers=headers, 
-                          timeout=EXPRESS_TIMEOUT, verify=REMOTE_VERIFY_SSL)
-    except Exception as exc:
-        REMOTE_POST_FAILURES += 1
-        # Log first few failures for debugging
-        if REMOTE_POST_FAILURES <= 3:
-            print(f"[!] Remote server POST failed: {exc}")
+    while HTTP_WORKER_RUNNING:
+        try:
+            # Get position from queue (blocking with timeout)
+            position = POSITION_QUEUE.get(timeout=0.1)
+            
+            queue_size = POSITION_QUEUE.qsize()
+            
+            # Add timestamp NOW (at send time, not parse time) for accuracy
+            position["timestamp"] = datetime.datetime.utcnow().isoformat() + "Z"
+            
+            # Send to Express endpoint
+            send_start = time_module.time()
+            try:
+                REQUEST_SESSION.post(EXPRESS_ENDPOINT, json=[position], headers=headers, 
+                                   timeout=EXPRESS_TIMEOUT, verify=EXPRESS_VERIFY_SSL)
+                send_duration = time_module.time() - send_start
+                POSITIONS_SENT += 1
+                
+                # Print stats periodically
+                now = time_module.time()
+                if now - LAST_STATS_PRINT >= STATS_PRINT_INTERVAL:
+                    print(f"[STATS] Queued: {POSITIONS_QUEUED} | Sent: {POSITIONS_SENT} | Queue Size: {queue_size} | Last Send: {send_duration*1000:.1f}ms | Failures: {EXPRESS_POST_FAILURES}")
+                    LAST_STATS_PRINT = now
+                    
+            except Exception as e:
+                EXPRESS_POST_FAILURES += 1
+                print(f"[!] Express POST failed: {e} (failures: {EXPRESS_POST_FAILURES})")
+            
+            # Send to secondary/backup remote server (if configured)
+            if REMOTE_SERVER_ENDPOINT:
+                try:
+                    REMOTE_SESSION.post(REMOTE_SERVER_ENDPOINT, json=[position], headers=headers, 
+                                      timeout=EXPRESS_TIMEOUT, verify=REMOTE_VERIFY_SSL)
+                except Exception as e:
+                    REMOTE_POST_FAILURES += 1
+                    if REMOTE_POST_FAILURES <= 3:
+                        print(f"[!] Remote backup POST failed: {e}")
+            
+            POSITION_QUEUE.task_done()
+        except queue.Empty:
+            continue
+        except Exception as e:
+            print(f"[!] HTTP worker error: {e}")
+            pass
 
 def decode_3d00_payload(payload_hex: str) -> dict:
     """Decode a 0x3d00 telemetry payload into useful fields."""
@@ -378,8 +419,21 @@ def parse_ack_packet(hex_data: str) -> str:
         return f"[!] Error parsing ACK packet: {e}\n    HEX: {hex_data}"
 
 
+# Track last identity persist time to throttle writes
+LAST_IDENTITY_PERSIST = 0
+IDENTITY_PERSIST_INTERVAL = 5.0  # Only write every 5 seconds
+
 def persist_identity_map():
-    """Persist the current identity mappings to JSON."""
+    """Persist the current identity mappings to JSON (throttled for performance)."""
+    global LAST_IDENTITY_PERSIST
+    
+    # Throttle: only write every 5 seconds
+    now = time_module.time()
+    if now - LAST_IDENTITY_PERSIST < IDENTITY_PERSIST_INTERVAL:
+        return
+    
+    LAST_IDENTITY_PERSIST = now
+    
     try:
         by_cookie = {}
         for ck, ident in COOKIE_MAP.items():
@@ -390,10 +444,9 @@ def persist_identity_map():
             "by_cookie": by_cookie,
             "by_entity": by_entity,
         }
-        tmp_path = IDENTITY_JSON_FILE + ".tmp"
-        with open(tmp_path, "w", encoding="utf-8") as jf:
+        # Write directly without temp file for performance
+        with open(IDENTITY_JSON_FILE, "w", encoding="utf-8") as jf:
             json.dump(data, jf, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, IDENTITY_JSON_FILE)
     except Exception:
         # Keep runtime resilient; don't crash on IO issues
         pass
@@ -894,22 +947,18 @@ def packet_handler(packet):
     elif hex_data.startswith("2f00"):
         parse_settings_packet(hex_data)
     elif hex_data.startswith(("3f00", "3f01")):
-        # Write 3f00/3f01 identity packets to dedicated hex log
-        if HEX_LOG_3F_FILE:
-            HEX_LOG_3F_FILE.write(hex_data + "\n")
-            HEX_LOG_3F_FILE.flush()
+        # Identity packets - no logging for performance
         parse_identity_packet(hex_data)
     elif hex_data.startswith("8006"):
-        # Write ACK packets' raw hex to dedicated hex-only log
-        if HEX_LOG_8006_FILE:
-            HEX_LOG_8006_FILE.write(hex_data + "\n")
-            HEX_LOG_8006_FILE.flush()
+        # ACK packets - no logging for performance
         parse_ack_packet(hex_data)
 
 
 def main():
-    """Sets up logging and starts the packet sniffer."""
+    """Sets up packet sniffer with async HTTP worker."""
     global LOG_FILE, HEX_LOG_3F_FILE, HEX_LOG_8006_FILE, SNIFF_PORT, SERVER_NAME, IDENTITY_JSON_FILE, LANDSCAPE_TRN_PATH
+    global HTTP_WORKER_THREAD, HTTP_WORKER_RUNNING
+    
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description='Condor UDP Packet Sniffer')
     parser.add_argument('--port', type=int, required=True, help='UDP port to sniff')
@@ -931,16 +980,14 @@ def main():
         sys.stderr.write(f"[!] Please ensure the landscape '{landscape_name}' is installed in C:\\Condor3\\Landscapes\\\n")
         sys.exit(1)
     
-    # Get PID for log file prefixes
+    # Get PID for identity map file
     pid = os.getpid()
     
     # Create logs directory if it doesn't exist
     logs_dir = "logs"
     os.makedirs(logs_dir, exist_ok=True)
     
-    # Create PID-prefixed log filenames in logs/ folder
-    identity_hex_log_filename = os.path.join(logs_dir, f"{pid}_hex_log_3f00_3f01_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
-    hex8006_log_filename = os.path.join(logs_dir, f"{pid}_hex_log_8006_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+    # Only create identity map JSON file (no hex logs)
     IDENTITY_JSON_FILE = os.path.join(logs_dir, f"{pid}_identity_map.json")
 
     try:
@@ -951,28 +998,43 @@ def main():
         except Exception:
             pass
 
-        # Use a single 'with' block to manage all files
-        with open(identity_hex_log_filename, "w") as hf3f, open(hex8006_log_filename, "w") as hf8006:
-            LOG_FILE = None
-            HEX_LOG_3F_FILE = hf3f
-            HEX_LOG_8006_FILE = hf8006
-            
-            # Silent mode - no console output for performance
-            # Files being created:
-            # - {pid}_hex_log_3f00_3f01_*.txt (identity packets)
-            # - {pid}_hex_log_8006_*.txt (ACK packets)
-            # - {pid}_identity_map.json (identity mappings)
-            
-            bpf_filter = f"udp and port {SNIFF_PORT}"
-            sniff(filter=bpf_filter, prn=packet_handler, store=0)
+        # Disable all file logging for performance
+        LOG_FILE = None
+        HEX_LOG_3F_FILE = None
+        HEX_LOG_8006_FILE = None
+        
+        print(f"[+] Starting sniffer on port {SNIFF_PORT}")
+        print(f"[+] Server: {SERVER_NAME or '(unnamed)'}")
+        print(f"[+] Landscape: {landscape_name}")
+        print(f"[+] Primary endpoint: {EXPRESS_ENDPOINT}")
+        if REMOTE_SERVER_ENDPOINT:
+            print(f"[+] Backup endpoint: {REMOTE_SERVER_ENDPOINT}")
+        print(f"[+] HTTP timeout: {EXPRESS_TIMEOUT}s")
+        print(f"[+] SSL verify: {EXPRESS_VERIFY_SSL}")
+        print("="*60)
+        
+        # Start HTTP worker thread for async position sending
+        HTTP_WORKER_RUNNING = True
+        HTTP_WORKER_THREAD = threading.Thread(target=http_worker_thread, daemon=True)
+        HTTP_WORKER_THREAD.start()
+        
+        # Start packet sniffing
+        bpf_filter = f"udp and port {SNIFF_PORT}"
+        print(f"[+] Sniffing with filter: {bpf_filter}")
+        print(f"[+] Waiting for packets...\n")
+        sniff(filter=bpf_filter, prn=packet_handler, store=0)
 
     except PermissionError:
-        # Silent mode - errors logged to stderr only if needed
         import sys
         sys.stderr.write("\n[!] PERMISSION ERROR: Please run this script with administrator/root privileges.\n")
     except Exception as e:
         import sys
         sys.stderr.write(f"\n[!] An error occurred: {e}\n")
+    finally:
+        # Stop HTTP worker thread
+        HTTP_WORKER_RUNNING = False
+        if HTTP_WORKER_THREAD:
+            HTTP_WORKER_THREAD.join(timeout=2.0)
 
 
 if __name__ == "__main__":
