@@ -1,0 +1,9 @@
+[*] PID: 25124
+[*] Server Name: test2
+[*] Starting UDP packet sniffer on port 56288
+[*] Logging detailed output to: 25124_udp_sniff_log_20251001_184903.txt
+[*] Logging 3d00 HEX strings to: 25124_hex_log_3d00_20251001_184903.txt
+[*] Logging 3f00/3f01 HEX strings to: 25124_hex_log_3f00_3f01_20251001_184903.txt
+[*] Logging 8006 HEX strings to: 25124_hex_log_8006_20251001_184903.txt
+[*] Identity map: 25124_identity_map.json
+============================================================

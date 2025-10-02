@@ -1,0 +1,4 @@
+C:\Users\Main\Documents\webdev\git\condorServerUDPscraper\sniffAndDecodeUDP_toExpress_viaFlask.py:303: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+C:\Users\Main\Documents\webdev\git\condorServerUDPscraper\sniffAndDecodeUDP_toExpress_viaFlask.py:129: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  payload_to_send.setdefault("timestamp", datetime.datetime.utcnow().isoformat() + "Z")
