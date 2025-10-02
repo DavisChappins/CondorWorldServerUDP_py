@@ -27,7 +27,6 @@ GRAVITY_MS2 = 9.80665
 # Global file handlers for logging
 
 LOG_FILE = None
-HEX_LOG_FILE = None
 HEX_LOG_3F_FILE = None
 HEX_LOG_8006_FILE = None
 
@@ -140,38 +139,33 @@ def send_position_to_express(payload: dict) -> None:
 
 def flush_position_batch() -> None:
     """Send all batched positions to Express.js as an array."""
-    global REQUEST_SESSION, EXPRESS_POST_FAILURES, POSITION_BATCH
+    global REQUEST_SESSION, EXPRESS_POST_FAILURES, POSITION_BATCH, SERVER_NAME, SNIFF_PORT
     
     if not POSITION_BATCH:
         return
     
     if requests is None:
-        if EXPRESS_POST_FAILURES == 0:
-            msg = "[!] requests library is not available; skipping Express.js forwarding."
-            print(msg)
-            if LOG_FILE:
-                LOG_FILE.write(msg + "\n")
-                LOG_FILE.flush()
         EXPRESS_POST_FAILURES += 1
         return
     
     # Convert batch dict to array
     positions_array = list(POSITION_BATCH.values())
     
+    # Prepare custom headers with server identification
+    headers = {
+        "X-Server-Name": SERVER_NAME or "",
+        "X-Port-Number": str(SNIFF_PORT)
+    }
+    
     try:
         if REQUEST_SESSION is None:
             REQUEST_SESSION = requests.Session()
-        REQUEST_SESSION.post(EXPRESS_ENDPOINT, json=positions_array, timeout=EXPRESS_TIMEOUT)
+        REQUEST_SESSION.post(EXPRESS_ENDPOINT, json=positions_array, headers=headers, timeout=EXPRESS_TIMEOUT)
         # Clear batch after successful send
         POSITION_BATCH.clear()
     except Exception as exc:
         EXPRESS_POST_FAILURES += 1
-        if EXPRESS_POST_FAILURES < 5 or EXPRESS_POST_FAILURES % 25 == 0:
-            msg = f"[!] Failed to POST telemetry batch to Express.js endpoint ({EXPRESS_ENDPOINT}): {exc}"
-            print(msg)
-            if LOG_FILE:
-                LOG_FILE.write(msg + "\n")
-                LOG_FILE.flush()
+        # Silent mode - no error output for performance
 
 def decode_3d00_payload(payload_hex: str) -> dict:
     """Decode a 0x3d00 telemetry payload into useful fields."""
@@ -844,13 +838,10 @@ def _attempt_write_fpl():
         with open(abspath, "w", encoding="utf-8") as f:
             f.write(content)
         FPL_STATE["written"] = True
-        msg = f"[*] Wrote reconstructed FPL to {abspath}"
-        print(msg)
-        if LOG_FILE:
-            LOG_FILE.write(msg + "\n")
-            LOG_FILE.flush()
+        # Silent mode - FPL written without console output
     except Exception as e:
-        print(f"[!] Failed to write FPL: {e}")
+        # Silent mode - no error output
+        pass
 
 def packet_handler(packet):
     """Main handler function for processing each captured packet."""
@@ -868,48 +859,33 @@ def packet_handler(packet):
     payload = udp.payload.original
     hex_data = payload.hex()
 
-    timestamp = datetime.datetime.now().strftime("%Y-m-d %H:%M:%S.%f")[:-3]
-    parsed_output = ""
-
+    # Process packets silently for performance
     if hex_data.startswith(("3d00", "3900", "3100")):
-        # If it's a 3d00 packet, write the hex to the dedicated log
-        if hex_data.startswith("3d00") and HEX_LOG_FILE:
-            HEX_LOG_FILE.write(hex_data + "\n")
-            HEX_LOG_FILE.flush()
-        parsed_output = parse_telemetry_packet(hex_data)
+        # Telemetry packets - no logging, just process
+        parse_telemetry_packet(hex_data)
     elif hex_data.startswith("1f00"):
-        parsed_output = parse_fpl_task_packet(hex_data)
+        parse_fpl_task_packet(hex_data)
     elif hex_data.startswith(("0700", "0f00")):
-        parsed_output = parse_disabled_list_packet(hex_data)
+        parse_disabled_list_packet(hex_data)
     elif hex_data.startswith("2f00"):
-        parsed_output = parse_settings_packet(hex_data)
+        parse_settings_packet(hex_data)
     elif hex_data.startswith(("3f00", "3f01")):
-        # Also write 3f00/3f01 packets to a dedicated combined hex log
+        # Write 3f00/3f01 identity packets to dedicated hex log
         if HEX_LOG_3F_FILE:
             HEX_LOG_3F_FILE.write(hex_data + "\n")
             HEX_LOG_3F_FILE.flush()
-        parsed_output = parse_identity_packet(hex_data)
+        parse_identity_packet(hex_data)
     elif hex_data.startswith("8006"):
-        parsed_output = parse_ack_packet(hex_data)
-        # Write ACK packets' raw hex to a dedicated hex-only log
+        # Write ACK packets' raw hex to dedicated hex-only log
         if HEX_LOG_8006_FILE:
             HEX_LOG_8006_FILE.write(hex_data + "\n")
             HEX_LOG_8006_FILE.flush()
-    else:
-        parsed_output = f"[?] UNKNOWN PACKET TYPE\n    - Full HEX: {hex_data}"
-    final_output = f"[{timestamp}] [{direction}] {parsed_output}"
-    print(final_output)
-    print("-" * 60)
-
-    # Write to the main, detailed log file (DISABLED - too large)
-    # if LOG_FILE:
-    #     LOG_FILE.write(final_output + "\n")
-    #     LOG_FILE.flush()
+        parse_ack_packet(hex_data)
 
 
 def main():
     """Sets up logging and starts the packet sniffer."""
-    global LOG_FILE, HEX_LOG_FILE, HEX_LOG_3F_FILE, HEX_LOG_8006_FILE, SNIFF_PORT, SERVER_NAME, IDENTITY_JSON_FILE, LANDSCAPE_TRN_PATH
+    global LOG_FILE, HEX_LOG_3F_FILE, HEX_LOG_8006_FILE, SNIFF_PORT, SERVER_NAME, IDENTITY_JSON_FILE, LANDSCAPE_TRN_PATH
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description='Condor UDP Packet Sniffer')
     parser.add_argument('--port', type=int, required=True, help='UDP port to sniff')
@@ -926,16 +902,15 @@ def main():
     
     # Verify TRN file exists
     if not os.path.exists(LANDSCAPE_TRN_PATH):
-        print(f"[!] ERROR: Landscape TRN file not found: {LANDSCAPE_TRN_PATH}")
-        print(f"[!] Please ensure the landscape '{landscape_name}' is installed in C:\\Condor3\\Landscapes\\")
+        import sys
+        sys.stderr.write(f"[!] ERROR: Landscape TRN file not found: {LANDSCAPE_TRN_PATH}\n")
+        sys.stderr.write(f"[!] Please ensure the landscape '{landscape_name}' is installed in C:\\Condor3\\Landscapes\\\n")
         sys.exit(1)
     
     # Get PID for log file prefixes
     pid = os.getpid()
     
-    # Create PID-prefixed log filenames (main log disabled to save space)
-    log_filename = f"{pid}_udp_sniff_log_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-    hex_log_filename = f"{pid}_hex_log_3d00_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    # Create PID-prefixed log filenames
     identity_hex_log_filename = f"{pid}_hex_log_3f00_3f01_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
     hex8006_log_filename = f"{pid}_hex_log_8006_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
     IDENTITY_JSON_FILE = f"{pid}_identity_map.json"
@@ -948,31 +923,28 @@ def main():
         except Exception:
             pass
 
-        # Use a single 'with' block to manage all files (main log disabled)
-        with open(hex_log_filename, "w") as hf, open(identity_hex_log_filename, "w") as hf3f, open(hex8006_log_filename, "w") as hf8006:
-            LOG_FILE = None  # Disabled to prevent huge log files
-            HEX_LOG_FILE = hf
+        # Use a single 'with' block to manage all files
+        with open(identity_hex_log_filename, "w") as hf3f, open(hex8006_log_filename, "w") as hf8006:
+            LOG_FILE = None
             HEX_LOG_3F_FILE = hf3f
             HEX_LOG_8006_FILE = hf8006
-            print(f"[*] PID: {pid}")
-            print(f"[*] Server Name: {SERVER_NAME or 'N/A'}")
-            print(f"[*] Landscape: {landscape_name}")
-            print(f"[*] TRN File: {LANDSCAPE_TRN_PATH}")
-            print(f"[*] Starting UDP packet sniffer on port {SNIFF_PORT}")
-            print(f"[*] Main detailed log: DISABLED (to save disk space)")
-            print(f"[*] Logging 3d00 HEX strings to: {hex_log_filename}")
-            print(f"[*] Logging 3f00/3f01 HEX strings to: {identity_hex_log_filename}")
-            print(f"[*] Logging 8006 HEX strings to: {hex8006_log_filename}")
-            print(f"[*] Identity map: {IDENTITY_JSON_FILE}")
-            print("=" * 60)
-
+            
+            # Silent mode - no console output for performance
+            # Files being created:
+            # - {pid}_hex_log_3f00_3f01_*.txt (identity packets)
+            # - {pid}_hex_log_8006_*.txt (ACK packets)
+            # - {pid}_identity_map.json (identity mappings)
+            
             bpf_filter = f"udp and port {SNIFF_PORT}"
             sniff(filter=bpf_filter, prn=packet_handler, store=0)
 
     except PermissionError:
-        print("\n[!] PERMISSION ERROR: Please run this script with administrator/root privileges.")
+        # Silent mode - errors logged to stderr only if needed
+        import sys
+        sys.stderr.write("\n[!] PERMISSION ERROR: Please run this script with administrator/root privileges.\n")
     except Exception as e:
-        print(f"\n[!] An error occurred: {e}")
+        import sys
+        sys.stderr.write(f"\n[!] An error occurred: {e}\n")
 
 
 if __name__ == "__main__":

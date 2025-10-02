@@ -11,6 +11,7 @@ import uuid
 import time
 import subprocess
 import glob
+import threading
 from datetime import datetime, timezone
 from flask import Flask, request, jsonify, render_template_string
 
@@ -198,10 +199,16 @@ def get_process_status(server):
             config.update_server(server['id'], {'pid': None, 'status': 'off'})
             return 'off'
     
-    # Check log file activity (last 5 seconds indicates transmitting)
+    # Check hex log file activity to determine transmitting status
     try:
-        log_pattern = f"{pid}_udp_sniff_log_*.txt"
+        # Check 3f00/3f01 identity log files (most reliable indicator)
+        log_pattern = f"{pid}_hex_log_3f00_3f01_*.txt"
         log_files = glob.glob(log_pattern)
+        
+        if not log_files:
+            # Try 8006 ACK log files as fallback
+            log_pattern = f"{pid}_hex_log_8006_*.txt"
+            log_files = glob.glob(log_pattern)
         
         if log_files:
             # Get the most recent log file
@@ -209,7 +216,9 @@ def get_process_status(server):
             mtime = os.path.getmtime(latest_log)
             age = time.time() - mtime
             
-            if age < 5:  # Active within last 5 seconds
+            # Transmitting if log modified within last 15 seconds
+            # (allows buffer for 10s polling delay)
+            if age < 15:
                 return 'transmitting'
             else:
                 return 'idle'
@@ -1069,6 +1078,13 @@ DASHBOARD_HTML = """
 # Main Entry Point
 # ============================================================================
 
+def print_reminder(host, port, stop_event):
+    """Print periodic reminder to keep window open and visit dashboard"""
+    while not stop_event.is_set():
+        print(f"\n*** Keep this window open! Go to http://{host}:{port} to configure and manage your servers ***\n")
+        stop_event.wait(30)  # Wait 30 seconds or until stop event is set
+
+
 if __name__ == '__main__':
     try:
         # Initialize config manager
@@ -1092,6 +1108,14 @@ if __name__ == '__main__':
         print(f"Dashboard running at: http://{host}:{port}")
         print("Press Ctrl+C to stop")
         print("=" * 60)
+        
+        # Print initial reminder
+        print(f"\n*** Keep this window open! Go to http://{host}:{port} to configure and manage your servers ***\n")
+        
+        # Start reminder thread
+        stop_event = threading.Event()
+        reminder_thread = threading.Thread(target=print_reminder, args=(host, port, stop_event), daemon=True)
+        reminder_thread.start()
         
         app.run(host=host, port=port, debug=False, threaded=True)
     
