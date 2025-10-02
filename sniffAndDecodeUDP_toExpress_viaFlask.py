@@ -910,10 +910,14 @@ def main():
     # Get PID for log file prefixes
     pid = os.getpid()
     
-    # Create PID-prefixed log filenames
-    identity_hex_log_filename = f"{pid}_hex_log_3f00_3f01_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-    hex8006_log_filename = f"{pid}_hex_log_8006_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-    IDENTITY_JSON_FILE = f"{pid}_identity_map.json"
+    # Create logs directory if it doesn't exist
+    logs_dir = "logs"
+    os.makedirs(logs_dir, exist_ok=True)
+    
+    # Create PID-prefixed log filenames in logs/ folder
+    identity_hex_log_filename = os.path.join(logs_dir, f"{pid}_hex_log_3f00_3f01_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+    hex8006_log_filename = os.path.join(logs_dir, f"{pid}_hex_log_8006_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+    IDENTITY_JSON_FILE = os.path.join(logs_dir, f"{pid}_identity_map.json")
 
     try:
         # Start fresh identity map each run

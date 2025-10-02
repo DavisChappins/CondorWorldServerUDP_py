@@ -252,9 +252,12 @@ def start_sniffer(server):
             '--landscape', landscape
         ]
         
+        # Create logs directory if it doesn't exist
+        os.makedirs('logs', exist_ok=True)
+        
         # Redirect output to log files to prevent pipe blocking
-        stdout_log = open(f'dashboard_{port}_stdout.log', 'w')
-        stderr_log = open(f'dashboard_{port}_stderr.log', 'w')
+        stdout_log = open(os.path.join('logs', f'dashboard_{port}_stdout.log'), 'w')
+        stderr_log = open(os.path.join('logs', f'dashboard_{port}_stderr.log'), 'w')
         
         # Start process with simple Popen - just like running from command line
         process = subprocess.Popen(
@@ -274,7 +277,7 @@ def start_sniffer(server):
             error_msg = f"Process exited immediately (code {poll_result})"
             try:
                 stderr_log.close()
-                with open(f'dashboard_{port}_stderr.log', 'r') as f:
+                with open(os.path.join('logs', f'dashboard_{port}_stderr.log'), 'r') as f:
                     stderr_output = f.read()
                     if stderr_output:
                         error_msg += f": {stderr_output[:200]}"

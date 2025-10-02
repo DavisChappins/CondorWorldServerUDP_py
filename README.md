@@ -73,7 +73,7 @@ python app.py
 5. The sniffer will begin capturing packets and you'll see:
    - Real-time status updates (Idle → Transmitting)
    - Process ID (PID) in the dashboard
-   - Log files created in the project directory
+   - Log files created in the `logs/` directory
 
 6. **Change landscape**: Stop the server, select a different landscape from the dropdown, then start again
 
@@ -94,9 +94,9 @@ The sniffer will output:
 [*] Landscape: AA3
 [*] TRN File: C:\Condor3\Landscapes\AA3\AA3.trn
 [*] Starting UDP packet sniffer on port 56288
-[*] Logging 3d00 HEX strings to: 12345_hex_log_3d00_YYYYMMDD_HHMMSS.txt
-[*] Logging 3f00/3f01 HEX strings to: 12345_hex_log_3f00_3f01_YYYYMMDD_HHMMSS.txt
-[*] Logging 8006 HEX strings to: 12345_hex_log_8006_YYYYMMDD_HHMMSS.txt
+[*] Logging 3f00/3f01 HEX strings to: logs/12345_hex_log_3f00_3f01_YYYYMMDD_HHMMSS.txt
+[*] Logging 8006 HEX strings to: logs/12345_hex_log_8006_YYYYMMDD_HHMMSS.txt
+[*] Identity map JSON: logs/12345_identity_map.json
 ============================================================
 ```
 
@@ -104,12 +104,14 @@ When packets arrive, decoded lines print to the console and log files. If enough
 
 ## Outputs Per Run
 
-- `udp_sniff_log_*.txt` — full, timestamped, human-readable decode log.
-- `hex_log_3d00_*.txt` — hex-only telemetry packets.
-- `hex_log_3f00_3f01_*.txt` — hex-only identity/config packets.
-- `hex_log_8006_*.txt` — hex-only acknowledgement packets.
-- `identity_map.json` — cookie→identity and entity→cookie mappings (regenerated each run).
-- `udp_fpl_*.fpl` — reconstructed Flight Plan (when enough data observed).
+All log files are stored in the `logs/` directory:
+
+- `logs/{PID}_hex_log_3f00_3f01_*.txt` — hex-only identity/config packets.
+- `logs/{PID}_hex_log_8006_*.txt` — hex-only acknowledgement packets.
+- `logs/{PID}_identity_map.json` — cookie→identity and entity→cookie mappings (regenerated each run).
+- `logs/dashboard_{port}_stdout.log` — dashboard process stdout logs.
+- `logs/dashboard_{port}_stderr.log` — dashboard process stderr logs.
+- `udp_fpl_*.fpl` — reconstructed Flight Plan (when enough data observed) - saved in root directory.
 
 ## XY → Lat/Lon Conversion
 

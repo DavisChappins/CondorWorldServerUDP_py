@@ -1,5 +1,15 @@
-*.txt   
+# Ignore logs directory
+logs/
+
+
+
+# Ignore other JSON files in root
 *.json
+*.backup
+*config.json.backup
+
+# Keep requirements.txt
 !requirements.txt
+
+# Ignore TRN files
 *.trn
-*.log
