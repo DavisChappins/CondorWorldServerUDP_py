@@ -71,7 +71,7 @@ python app.py
 4. **Start the server** by clicking the green "Start" button
 
 5. The sniffer will begin capturing packets and you'll see:
-   - Real-time status updates (Idle → Transmitting)
+   - Real-time status updates (Listening → Transmitting)
    - Process ID (PID) in the dashboard
    - Log files created in the `logs/` directory
 

@@ -6,7 +6,7 @@ A modern web-based dashboard for managing multiple Condor UDP packet sniffer ins
 
 - ✨ **Modern Bootstrap UI** - Beautiful, responsive interface
 - 🚀 **Multi-Server Management** - Run multiple sniffers on different ports simultaneously
-- 📊 **Real-Time Status Monitoring** - Live status indicators (Off, Idle, Transmitting, Error)
+- 📊 **Real-Time Status Monitoring** - Live status indicators (Off, Listening, Transmitting, Error)
 - 💾 **Persistent Configuration** - Servers saved to `config.json`
 - 🔄 **Auto-Refresh** - Status updates every 2 seconds
 - 🎯 **Process Isolation** - Each sniffer runs as independent subprocess with unique PID
@@ -70,7 +70,7 @@ The dashboard will start at: `http://127.0.0.1:5001`
 | Status | LED Color | Description |
 |--------|-----------|-------------|
 | **Off** | Gray | Process not running |
-| **Idle** | Green (solid) | Process running, no recent packet activity |
+| **Listening** | Green (solid) | Process running, waiting for packets |
 | **Transmitting** | Green (flashing) | Process running, actively receiving packets |
 | **Error** | Red | Process crashed or failed to start |
 

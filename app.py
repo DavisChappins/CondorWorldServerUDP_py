@@ -202,12 +202,12 @@ def get_process_status(server):
     # Check hex log file activity to determine transmitting status
     try:
         # Check 3f00/3f01 identity log files (most reliable indicator)
-        log_pattern = f"{pid}_hex_log_3f00_3f01_*.txt"
+        log_pattern = os.path.join('logs', f"{pid}_hex_log_3f00_3f01_*.txt")
         log_files = glob.glob(log_pattern)
         
         if not log_files:
             # Try 8006 ACK log files as fallback
-            log_pattern = f"{pid}_hex_log_8006_*.txt"
+            log_pattern = os.path.join('logs', f"{pid}_hex_log_8006_*.txt")
             log_files = glob.glob(log_pattern)
         
         if log_files:
@@ -221,11 +221,11 @@ def get_process_status(server):
             if age < 15:
                 return 'transmitting'
             else:
-                return 'idle'
+                return 'listening'
         else:
-            return 'idle'
+            return 'listening'
     except Exception:
-        return 'idle'
+        return 'listening'
 
 
 def start_sniffer(server):
@@ -294,7 +294,7 @@ def start_sniffer(server):
         # Update server config
         config.update_server(server['id'], {
             'pid': pid,
-            'status': 'idle',
+            'status': 'listening',
             'last_started': datetime.now(timezone.utc).isoformat(),
             'last_error': None
         })
@@ -606,7 +606,7 @@ DASHBOARD_HTML = """
             background: #6c757d;
         }
         
-        .status-idle {
+        .status-listening {
             background: #28a745;
             box-shadow: 0 0 12px rgba(40, 167, 69, 0.6);
         }
