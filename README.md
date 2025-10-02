@@ -15,21 +15,21 @@ A Python tool to sniff, decode, and log UDP traffic from Condor (port 56298 by d
 - **Reconstruct .fpl files** from captured task/settings/disabled-airspaces.
 - **Multiple logs** written per run (human-readable and hex-only).
 - **Identity persistence** into `identity_map.json` (regenerated each run).
-- **XY→Lat/Lon conversion** via 2 modes:
-  - Preferred: `navicon_bridge` using `AA3.trn` + helper EXE.
-  - Fallback: parametric model in `aa3_converter.py` (NumPy-based).
+- **XY→Lat/Lon conversion** using `navicon_bridge` with landscape-specific `.trn` files from `C:\Condor3\Landscapes\`.
+- **Web dashboard** for managing multiple UDP sniffer instances with landscape selection.
 
 ## Repository Layout
 
-- `sniffAndDecodeUDP.py` — main sniffer/decoder entrypoint.
-- `aa3_converter.py` — parametric XY→Lat/Lon conversion (NumPy).
-- `navicon_bridge.py` — calls 32-bit NaviCon via helper EXE & `AA3.trn`.
+- `app.py` — Flask web dashboard for managing multiple UDP sniffer instances.
+- `sniffAndDecodeUDP_toExpress_viaFlask.py` — main sniffer/decoder entrypoint.
+- `navicon_bridge.py` — calls 32-bit NaviCon via helper EXE & landscape `.trn` files.
 - `replay_hex_log.py` — offline parser for hex-only logs (uses legacy parser in `scapy_udp_56298_14.py`).
 - `scapy_udp_56298_*.py` — prior analysis scripts and parsers.
-- `AA3.trn` — terrain resource for NaviCon (keep in repo root). found in landscapes folder not in github
 - `Condor3XY2LatLon.exe` — helper executable used by `navicon_bridge.py`.
 - `extra/` — utilities and experiments (including a separate README).
 - `requirements.txt` — Python dependencies for core tools.
+- `DASHBOARD_README.md` — detailed documentation for the Flask dashboard.
+- `QUICKSTART.md` — quick start guide for new users.
 
 ## Requirements
 
@@ -38,7 +38,7 @@ A Python tool to sniff, decode, and log UDP traffic from Condor (port 56298 by d
 - **Administrator privileges** (maybe) to capture packets
 - **Python packages** (install via `requirements.txt`):
   - `scapy`
-  - `numpy` (for `aa3_converter.py` fallback conversion)
+
 
 Install Python packages:
 
@@ -52,27 +52,55 @@ Tip: Installing Wireshark also offers to install Npcap. Ensure the "Install Npca
 
 ## Quick Start
 
-1. Open an elevated terminal (Run as Administrator) on Windows.
-2. Ensure Npcap is installed and the game/server is emitting UDP on port 56298.
-3. From the repo root, run:
+### Using the Flask Dashboard (Recommended)
+
+1. **Start the Flask dashboard** (Run as Administrator on Windows):
 
 ```bash
-python sniffAndDecodeUDP.py
+python app.py
 ```
 
-4. You should see console output like:
+2. **Open your browser** and navigate to `http://127.0.0.1:5001`
 
+3. **Add a server**:
+   - Enter a server name (e.g., "Condor Server 1")
+   - Select a landscape from the dropdown (e.g., AA3, Slovenia3, Colorado_C2)
+   - Enter the UDP port (e.g., 56288 or 56298)
+   - Click "Add Server"
+
+4. **Start the server** by clicking the green "Start" button
+
+5. The sniffer will begin capturing packets and you'll see:
+   - Real-time status updates (Idle → Transmitting)
+   - Process ID (PID) in the dashboard
+   - Log files created in the project directory
+
+6. **Change landscape**: Stop the server, select a different landscape from the dropdown, then start again
+
+7. **Monitor multiple servers**: Add and manage multiple UDP sniffers on different ports simultaneously
+
+### Manual Command Line Usage (Advanced)
+
+Alternatively, you can run the sniffer directly from the command line:
+
+```bash
+python sniffAndDecodeUDP_toExpress_viaFlask.py --port 56288 --server-name "My Server" --landscape AA3
 ```
-[*] Starting UDP packet sniffer on port 56298
-[*] Logging detailed output to: udp_sniff_log_YYYYMMDD_HHMMSS.txt
-[*] Logging 3d00 HEX strings to: hex_log_3d00_YYYYMMDD_HHMMSS.txt
-[*] Logging 3f00/3f01 HEX strings to: hex_log_3f00_3f01_YYYYMMDD_HHMMSS.txt
-[*] Logging 8006 HEX strings to: hex_log_8006_YYYYMMDD_HHMMSS.txt
+
+The sniffer will output:
+```
+[*] PID: 12345
+[*] Server Name: My Server
+[*] Landscape: AA3
+[*] TRN File: C:\Condor3\Landscapes\AA3\AA3.trn
+[*] Starting UDP packet sniffer on port 56288
+[*] Logging 3d00 HEX strings to: 12345_hex_log_3d00_YYYYMMDD_HHMMSS.txt
+[*] Logging 3f00/3f01 HEX strings to: 12345_hex_log_3f00_3f01_YYYYMMDD_HHMMSS.txt
+[*] Logging 8006 HEX strings to: 12345_hex_log_8006_YYYYMMDD_HHMMSS.txt
 ============================================================
 ```
 
-5. When packets arrive, decoded lines print to the console and to the main log.
-6. If enough FPL-related packets are captured, an `udp_fpl_YYYYMMDD_HHMMSS.fpl` is written to the repo root.
+When packets arrive, decoded lines print to the console and log files. If enough FPL-related packets are captured, an `udp_fpl_YYYYMMDD_HHMMSS.fpl` is written to the repo root.
 
 ## Outputs Per Run
 
@@ -85,13 +113,13 @@ python sniffAndDecodeUDP.py
 
 ## XY → Lat/Lon Conversion
 
-By default, `sniffAndDecodeUDP.py` tries the high-fidelity NaviCon path and falls back to the parametric model if unavailable.
+The sniffer uses `navicon_bridge` to convert Condor's XY coordinates to Lat/Lon using landscape-specific terrain files:
 
-- Preferred path: `navicon_bridge.xy_to_latlon_default(x, y)` uses:
-  - `AA3.trn` in the repo root
+- **Landscape-specific conversion**: `navicon_bridge.xy_to_latlon_trn(trn_path, x, y)` uses:
+  - Landscape `.trn` file from `C:\Condor3\Landscapes\{landscape}\{landscape}.trn`
   - `Condor3XY2LatLon.exe` (32-bit helper)
 
-If either is missing or errors occur, the fallback `convert_xy_to_lat_lon(x, y)` from `aa3_converter.py` is used (less accurate but self-contained; requires NumPy).
+The landscape is selected when adding a server in the dashboard or via the `--landscape` command-line argument. The script will verify the TRN file exists on startup and exit with an error if not found.
 
 ## Telemetry Packet Map (0x3d00)
 
@@ -146,29 +174,34 @@ Notes:
 
 ## Configuration
 
-- **Sniff port**: Update `SNIFF_PORT` at the top of `sniffAndDecodeUDP.py` if your game/server uses a different port.
 - **Permissions**: If you get a permission error, re-run as Administrator.
 
 ## Known Limitations
 
 - **Admin + Npcap required** on Windows for live sniffing.
-- **G-Force displayed as “(incorrect)”**. The magnitude is computed from raw accel vectors and divided by g; may not match in-game UI.
+- **Condor 3 landscapes required** for coordinate conversion. The script needs access to `C:\Condor3\Landscapes\` with valid `.trn` files.
+- **G-Force displayed as "(incorrect)"**. The magnitude is computed from raw accel vectors and divided by g; may not match in-game UI.
 - **Identity parsing is heuristic**. `parse_identity_packet()` scans length-prefixed ASCII; fields may occasionally misalign or be missing.
 - **FPL reconstruction is best-effort**. The .fpl is written only after task, settings, and disabled-airspace data are sufficiently observed; content may be incomplete if packets were missed.
-- **Lat/Lon accuracy** depends on the conversion path. The NaviCon path needs `AA3.trn` and the 32-bit helper; the fallback model is approximate.
 - **Windows-focused**. Sniffing path is validated on Windows; other platforms are untested here.
 
 ## Troubleshooting
-
 - **No packets show up**:
-  - Verify the correct port (`SNIFF_PORT`) and that traffic is local to the machine.
-  - Ensure Npcap is installed and you’re running the shell as Administrator.
+  - Verify the correct port and that traffic is local to the machine.
+  - Ensure Npcap is installed and you're running as Administrator.
   - Check Windows Firewall rules.
+- **Landscape not found**:
+  - Ensure the landscape is installed in `C:\Condor3\Landscapes\{landscape}\`
+  - Verify the `.trn` file exists: `C:\Condor3\Landscapes\{landscape}\{landscape}.trn`
+  - The dashboard will only show landscapes with valid `.trn` files.
 - **Lat/Lon conversion errors**:
-  - Confirm `AA3.trn` and `Condor3XY2LatLon.exe` are in the repo root for the NaviCon path.
-  - If missing, install NumPy and rely on the fallback converter.
+  - Confirm `Condor3XY2LatLon.exe` is in the repo root.
+  - Verify the selected landscape's `.trn` file exists and is accessible.
 - **.fpl not written**:
   - You may not have captured all required packets yet (task + settings + full/known disabled-airspaces).
+- **Dashboard won't start**:
+  - Ensure Flask is installed: `pip install flask`
+  - Check if port 5001 is already in use.
 
 ## License
 

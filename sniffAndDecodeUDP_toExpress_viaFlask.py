@@ -3,7 +3,6 @@ import datetime
 import math
 import struct
 from scapy.all import sniff, UDP
-from aa3_converter import convert_xy_to_lat_lon
 import os
 import json
 import argparse
@@ -20,6 +19,7 @@ except Exception:
 # The UDP port the game is using (will be set via CLI argument)
 SNIFF_PORT = 56288
 SERVER_NAME = ""
+LANDSCAPE_TRN_PATH = None  # Will be set based on --landscape argument
 
 # Standard gravity for G-force calculation
 GRAVITY_MS2 = 9.80665
@@ -240,16 +240,15 @@ def parse_telemetry_packet(hex_data: str) -> str:
 
         if msg_type == "3d00":
             decoded = decode_3d00_payload(payload_hex)
-            # Prefer conversion via NaviCon.dll bridge (AA3.trn in project root), fallback to calibrated model
-            lat = lon = float('nan')
-            try:
-                if navicon_bridge is not None:
-                    lat, lon = navicon_bridge.xy_to_latlon_default(decoded["pos_x"], decoded["pos_y"])
-                else:
-                    raise RuntimeError("navicon_bridge not available")
-            except Exception:
-                # Fallback to parametric converter
-                lat, lon = convert_xy_to_lat_lon(decoded["pos_x"], decoded["pos_y"])
+            # Require NaviCon.dll bridge for coordinate conversion
+            if navicon_bridge is None:
+                raise RuntimeError("navicon_bridge is required but not available. Ensure navicon_bridge.py is properly configured.")
+            
+            # Use the landscape-specific TRN file
+            if LANDSCAPE_TRN_PATH:
+                lat, lon = navicon_bridge.xy_to_latlon_trn(LANDSCAPE_TRN_PATH, decoded["pos_x"], decoded["pos_y"])
+            else:
+                lat, lon = navicon_bridge.xy_to_latlon_default(decoded["pos_x"], decoded["pos_y"])
 
             # Identity lookup by cookie
             cookie = decoded.get("cookie", 0)
@@ -790,19 +789,17 @@ def _attempt_write_fpl():
         lines.append(f"TPAltitude{idx}={tp['altitude']:.2f}")
 
     # Optional: convert to lat/lon as extra fields (helpful for inspection)
-    try:
-        for idx, tp in enumerate(task["turnpoints"]):
-            try:
-                if navicon_bridge is not None:
+    if navicon_bridge is not None:
+        try:
+            for idx, tp in enumerate(task["turnpoints"]):
+                try:
                     lat, lon = navicon_bridge.xy_to_latlon_default(tp['x'], tp['y'])
-                else:
-                    lat, lon = convert_xy_to_lat_lon(tp['x'], tp['y'])
-                lines.append(f"TPLat{idx}={lat:.6f}")
-                lines.append(f"TPLon{idx}={lon:.6f}")
-            except Exception:
-                pass
-    except Exception:
-        pass
+                    lines.append(f"TPLat{idx}={lat:.6f}")
+                    lines.append(f"TPLon{idx}={lon:.6f}")
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     # Write DisabledAirspaces under [Task] as a single CSV line
     if ids:
@@ -912,21 +909,32 @@ def packet_handler(packet):
 
 def main():
     """Sets up logging and starts the packet sniffer."""
-    global LOG_FILE, HEX_LOG_FILE, HEX_LOG_3F_FILE, HEX_LOG_8006_FILE, SNIFF_PORT, SERVER_NAME, IDENTITY_JSON_FILE
+    global LOG_FILE, HEX_LOG_FILE, HEX_LOG_3F_FILE, HEX_LOG_8006_FILE, SNIFF_PORT, SERVER_NAME, IDENTITY_JSON_FILE, LANDSCAPE_TRN_PATH
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description='Condor UDP Packet Sniffer')
     parser.add_argument('--port', type=int, required=True, help='UDP port to sniff')
     parser.add_argument('--server-name', type=str, default='', help='Server name for identification')
+    parser.add_argument('--landscape', type=str, default='AA3', help='Landscape name (e.g., AA3, Slovenia3, Colorado_C2)')
     args = parser.parse_args()
     
     SNIFF_PORT = args.port
     SERVER_NAME = args.server_name
     
+    # Build path to landscape TRN file
+    landscape_name = args.landscape
+    LANDSCAPE_TRN_PATH = rf"C:\Condor3\Landscapes\{landscape_name}\{landscape_name}.trn"
+    
+    # Verify TRN file exists
+    if not os.path.exists(LANDSCAPE_TRN_PATH):
+        print(f"[!] ERROR: Landscape TRN file not found: {LANDSCAPE_TRN_PATH}")
+        print(f"[!] Please ensure the landscape '{landscape_name}' is installed in C:\\Condor3\\Landscapes\\")
+        sys.exit(1)
+    
     # Get PID for log file prefixes
     pid = os.getpid()
     
     # Create PID-prefixed log filenames (main log disabled to save space)
-    # log_filename = f"{pid}_udp_sniff_log_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    log_filename = f"{pid}_udp_sniff_log_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
     hex_log_filename = f"{pid}_hex_log_3d00_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
     identity_hex_log_filename = f"{pid}_hex_log_3f00_3f01_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
     hex8006_log_filename = f"{pid}_hex_log_8006_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
@@ -948,6 +956,8 @@ def main():
             HEX_LOG_8006_FILE = hf8006
             print(f"[*] PID: {pid}")
             print(f"[*] Server Name: {SERVER_NAME or 'N/A'}")
+            print(f"[*] Landscape: {landscape_name}")
+            print(f"[*] TRN File: {LANDSCAPE_TRN_PATH}")
             print(f"[*] Starting UDP packet sniffer on port {SNIFF_PORT}")
             print(f"[*] Main detailed log: DISABLED (to save disk space)")
             print(f"[*] Logging 3d00 HEX strings to: {hex_log_filename}")

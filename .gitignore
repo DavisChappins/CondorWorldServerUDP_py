@@ -2,3 +2,4 @@
 *.json
 !requirements.txt
 *.trn
+*.log

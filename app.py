@@ -22,6 +22,32 @@ except ImportError:
 
 app = Flask(__name__)
 CONFIG_FILE = "config.json"
+LANDSCAPES_PATH = r"C:\Condor3\Landscapes"
+
+
+# ============================================================================
+# Landscape Management
+# ============================================================================
+
+def get_available_landscapes():
+    """Scan C:\Condor3\Landscapes for available landscape folders with .trn files"""
+    landscapes = []
+    
+    if not os.path.exists(LANDSCAPES_PATH):
+        return landscapes
+    
+    try:
+        for item in os.listdir(LANDSCAPES_PATH):
+            item_path = os.path.join(LANDSCAPES_PATH, item)
+            if os.path.isdir(item_path):
+                # Check if a .trn file with the same name exists
+                trn_file = os.path.join(item_path, f"{item}.trn")
+                if os.path.isfile(trn_file):
+                    landscapes.append(item)
+    except Exception as e:
+        print(f"[!] Error scanning landscapes: {e}")
+    
+    return sorted(landscapes)
 
 
 # ============================================================================
@@ -67,12 +93,13 @@ class ConfigManager:
         except Exception as e:
             print(f"[!] Error saving config: {e}")
     
-    def add_server(self, server_name, port):
+    def add_server(self, server_name, port, landscape='AA3'):
         """Add a new server configuration"""
         server = {
             'id': str(uuid.uuid4()),
             'server_name': server_name,
             'port': port,
+            'landscape': landscape,
             'pid': None,
             'status': 'off',
             'created_at': datetime.now(timezone.utc).isoformat(),
@@ -204,12 +231,16 @@ def start_sniffer(server):
         if server.get('pid') and is_process_running(server['pid']):
             return {'success': False, 'error': 'Server is already running'}
         
+        # Get landscape (default to AA3 for backward compatibility)
+        landscape = server.get('landscape', 'AA3')
+        
         # Build command
         cmd = [
             sys.executable,
             'sniffAndDecodeUDP_toExpress_viaFlask.py',
             '--port', str(port),
-            '--server-name', server['server_name']
+            '--server-name', server['server_name'],
+            '--landscape', landscape
         ]
         
         # Redirect output to log files to prevent pipe blocking
@@ -351,9 +382,13 @@ def api_add_server():
     
     server_name = data.get('server_name', '').strip()
     port = data.get('port')
+    landscape = data.get('landscape', 'AA3').strip()
     
     if not server_name:
         return jsonify({'error': 'Server name is required'}), 400
+    
+    if not landscape:
+        return jsonify({'error': 'Landscape is required'}), 400
     
     try:
         port = int(port)
@@ -367,7 +402,7 @@ def api_add_server():
         if server['port'] == port:
             return jsonify({'error': f'Port {port} is already in use'}), 400
     
-    server = config.add_server(server_name, port)
+    server = config.add_server(server_name, port, landscape)
     return jsonify(server), 201
 
 
@@ -431,6 +466,40 @@ def api_get_server_status(server_id):
     config.update_server(server_id, {'status': status})
     
     return jsonify({'status': status, 'pid': server.get('pid')})
+
+
+@app.route('/api/landscapes', methods=['GET'])
+def api_get_landscapes():
+    """Get list of available landscapes"""
+    landscapes = get_available_landscapes()
+    return jsonify({'landscapes': landscapes})
+
+
+@app.route('/api/servers/<server_id>/landscape', methods=['PUT'])
+def api_update_landscape(server_id):
+    """Update server landscape (only when stopped)"""
+    server = config.get_server(server_id)
+    
+    if not server:
+        return jsonify({'error': 'Server not found'}), 404
+    
+    # Check if server is running
+    if server.get('pid') and is_process_running(server['pid']):
+        return jsonify({'error': 'Cannot change landscape while server is running. Stop the server first.'}), 400
+    
+    data = request.get_json()
+    landscape = data.get('landscape', '').strip()
+    
+    if not landscape:
+        return jsonify({'error': 'Landscape is required'}), 400
+    
+    # Verify landscape exists
+    available = get_available_landscapes()
+    if landscape not in available:
+        return jsonify({'error': f'Landscape "{landscape}" not found in {LANDSCAPES_PATH}'}), 400
+    
+    config.update_server(server_id, {'landscape': landscape})
+    return jsonify({'success': True, 'landscape': landscape})
 
 
 # ============================================================================
@@ -702,6 +771,7 @@ DASHBOARD_HTML = """
                         <thead>
                             <tr>
                                 <th>Server Name</th>
+                                <th>Landscape</th>
                                 <th>Port</th>
                                 <th>PID</th>
                                 <th style="width: 150px;">Status</th>
@@ -710,7 +780,7 @@ DASHBOARD_HTML = """
                         </thead>
                         <tbody id="servers-table-body">
                             <tr class="empty-state">
-                                <td colspan="5">
+                                <td colspan="6">
                                     <i class="bi bi-inbox"></i>
                                     <p>No servers configured yet. Add one below to get started!</p>
                                 </td>
@@ -724,15 +794,21 @@ DASHBOARD_HTML = """
         <div class="add-server-section">
             <h5><i class="bi bi-plus-circle"></i> Add New Server</h5>
             <form id="add-server-form" class="row g-3">
-                <div class="col-md-5">
+                <div class="col-md-4">
                     <label for="server-name" class="form-label">Server Name</label>
                     <input type="text" class="form-control" id="server-name" placeholder="e.g., Condor Server 1" required>
                 </div>
                 <div class="col-md-3">
+                    <label for="server-landscape" class="form-label">Landscape</label>
+                    <select class="form-control" id="server-landscape" required>
+                        <option value="">Loading...</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
                     <label for="server-port" class="form-label">Port</label>
                     <input type="number" class="form-control" id="server-port" placeholder="56288" min="1024" max="65535" required>
                 </div>
-                <div class="col-md-4 d-flex align-items-end">
+                <div class="col-md-3 d-flex align-items-end">
                     <button type="submit" class="btn btn-primary w-100">
                         <i class="bi bi-plus-lg"></i> Add Server
                     </button>
@@ -747,6 +823,30 @@ DASHBOARD_HTML = """
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         let servers = [];
+        let landscapes = [];
+        
+        // Fetch landscapes on load
+        async function fetchLandscapes() {
+            try {
+                const response = await fetch('/api/landscapes');
+                const data = await response.json();
+                landscapes = data.landscapes;
+                
+                // Populate landscape dropdown
+                const select = document.getElementById('server-landscape');
+                if (landscapes.length === 0) {
+                    select.innerHTML = '<option value="">No landscapes found in C:\\Condor3\\Landscapes</option>';
+                } else {
+                    select.innerHTML = landscapes.map(l => 
+                        `<option value="${l}"${l === 'AA3' ? ' selected' : ''}>${l}</option>`
+                    ).join('');
+                }
+            } catch (error) {
+                console.error('Error fetching landscapes:', error);
+                const select = document.getElementById('server-landscape');
+                select.innerHTML = '<option value="AA3">AA3 (default)</option>';
+            }
+        }
         
         // Fetch servers on load
         async function fetchServers() {
@@ -766,7 +866,7 @@ DASHBOARD_HTML = """
             if (servers.length === 0) {
                 tbody.innerHTML = `
                     <tr class="empty-state">
-                        <td colspan="5">
+                        <td colspan="6">
                             <i class="bi bi-inbox"></i>
                             <p>No servers configured yet. Add one below to get started!</p>
                         </td>
@@ -781,9 +881,20 @@ DASHBOARD_HTML = """
                 const pid = server.pid || '—';
                 const isRunning = server.status !== 'off';
                 
+                const landscape = server.landscape || 'AA3';
+                const landscapeDisabled = isRunning ? 'disabled' : '';
+                const landscapeTitle = isRunning ? 'Stop server to change landscape' : 'Click to change landscape';
+                
                 return `
                     <tr>
                         <td><strong>${escapeHtml(server.server_name)}</strong></td>
+                        <td>
+                            <select class="form-select form-select-sm" ${landscapeDisabled} title="${landscapeTitle}" 
+                                    onchange="updateLandscape('${server.id}', this.value)" 
+                                    style="min-width: 120px; ${isRunning ? 'opacity: 0.6; cursor: not-allowed;' : ''}">
+                                ${landscapes.map(l => `<option value="${l}"${l === landscape ? ' selected' : ''}>${l}</option>`).join('')}
+                            </select>
+                        </td>
                         <td><span class="badge bg-secondary">${server.port}</span></td>
                         <td><code>${pid}</code></td>
                         <td>
@@ -814,12 +925,13 @@ DASHBOARD_HTML = """
             
             const serverName = document.getElementById('server-name').value.trim();
             const port = parseInt(document.getElementById('server-port').value);
+            const landscape = document.getElementById('server-landscape').value;
             
             try {
                 const response = await fetch('/api/servers', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({server_name: serverName, port: port})
+                    body: JSON.stringify({server_name: serverName, port: port, landscape: landscape})
                 });
                 
                 if (response.ok) {
@@ -887,6 +999,29 @@ DASHBOARD_HTML = """
             }
         }
         
+        // Update landscape
+        async function updateLandscape(serverId, landscape) {
+            try {
+                const response = await fetch(`/api/servers/${serverId}/landscape`, {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({landscape: landscape})
+                });
+                
+                if (response.ok) {
+                    showAlert('Landscape updated successfully!', 'success');
+                    fetchServers();
+                } else {
+                    const error = await response.json();
+                    showAlert(error.error || 'Failed to update landscape', 'danger');
+                    fetchServers(); // Refresh to revert dropdown
+                }
+            } catch (error) {
+                showAlert('Error: ' + error.message, 'danger');
+                fetchServers(); // Refresh to revert dropdown
+            }
+        }
+        
         // Show alert
         function showAlert(message, type) {
             const alertContainer = document.getElementById('alert-container');
@@ -922,6 +1057,7 @@ DASHBOARD_HTML = """
         setInterval(fetchServers, 10000);
         
         // Initial load
+        fetchLandscapes();
         fetchServers();
     </script>
 </body>
