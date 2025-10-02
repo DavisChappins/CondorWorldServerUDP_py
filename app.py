@@ -22,7 +22,10 @@ except ImportError:
     print("[!] Warning: psutil not installed. Install with: pip install psutil")
 
 app = Flask(__name__)
-CONFIG_FILE = "config.json"
+
+# Get script directory for all file paths
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
 LANDSCAPES_PATH = r"C:\Condor3\Landscapes"
 
 
@@ -199,15 +202,18 @@ def get_process_status(server):
             config.update_server(server['id'], {'pid': None, 'status': 'off'})
             return 'off'
     
+    # Get logs directory path
+    logs_dir = os.path.join(SCRIPT_DIR, 'logs')
+    
     # Check hex log file activity to determine transmitting status
     try:
         # Check 3f00/3f01 identity log files (most reliable indicator)
-        log_pattern = os.path.join('logs', f"{pid}_hex_log_3f00_3f01_*.txt")
+        log_pattern = os.path.join(logs_dir, f"{pid}_hex_log_3f00_3f01_*.txt")
         log_files = glob.glob(log_pattern)
         
         if not log_files:
             # Try 8006 ACK log files as fallback
-            log_pattern = os.path.join('logs', f"{pid}_hex_log_8006_*.txt")
+            log_pattern = os.path.join(logs_dir, f"{pid}_hex_log_8006_*.txt")
             log_files = glob.glob(log_pattern)
         
         if log_files:
@@ -243,27 +249,32 @@ def start_sniffer(server):
         # Get landscape (default to AA3 for backward compatibility)
         landscape = server.get('landscape', 'AA3')
         
+        # Get absolute path to the sniffer script (in same directory as app.py)
+        sniffer_script = os.path.join(SCRIPT_DIR, 'sniffAndDecodeUDP_toExpress_viaFlask.py')
+        
         # Build command
         cmd = [
             sys.executable,
-            'sniffAndDecodeUDP_toExpress_viaFlask.py',
+            sniffer_script,
             '--port', str(port),
             '--server-name', server['server_name'],
             '--landscape', landscape
         ]
         
-        # Create logs directory if it doesn't exist
-        os.makedirs('logs', exist_ok=True)
+        # Create logs directory if it doesn't exist (in script directory)
+        logs_dir = os.path.join(SCRIPT_DIR, 'logs')
+        os.makedirs(logs_dir, exist_ok=True)
         
         # Redirect output to log files to prevent pipe blocking
-        stdout_log = open(os.path.join('logs', f'dashboard_{port}_stdout.log'), 'w')
-        stderr_log = open(os.path.join('logs', f'dashboard_{port}_stderr.log'), 'w')
+        stdout_log = open(os.path.join(logs_dir, f'dashboard_{port}_stdout.log'), 'w')
+        stderr_log = open(os.path.join(logs_dir, f'dashboard_{port}_stderr.log'), 'w')
         
-        # Start process with simple Popen - just like running from command line
+        # Start process with simple Popen - set cwd to script directory
         process = subprocess.Popen(
             cmd,
             stdout=stdout_log,
-            stderr=stderr_log
+            stderr=stderr_log,
+            cwd=SCRIPT_DIR
         )
         
         pid = process.pid
@@ -277,7 +288,7 @@ def start_sniffer(server):
             error_msg = f"Process exited immediately (code {poll_result})"
             try:
                 stderr_log.close()
-                with open(os.path.join('logs', f'dashboard_{port}_stderr.log'), 'r') as f:
+                with open(os.path.join(logs_dir, f'dashboard_{port}_stderr.log'), 'r') as f:
                     stderr_output = f.read()
                     if stderr_output:
                         error_msg += f": {stderr_output[:200]}"
