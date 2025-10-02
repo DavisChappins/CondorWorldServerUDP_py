@@ -16,7 +16,6 @@ try:
 except Exception:
     navicon_bridge = None
 import threading
-import queue
 
 # The UDP port the game is using (will be set via CLI argument)
 SNIFF_PORT = 56288
@@ -56,9 +55,12 @@ REMOTE_SESSION = None
 REMOTE_POST_FAILURES = 0
 REMOTE_VERIFY_SSL = False  # Set to True if you have valid SSL certificate
 
-# Async HTTP request queue for non-blocking position sending
+# Batch positions before sending (1Hz batching)
 import time as time_module
-POSITION_QUEUE = queue.Queue(maxsize=10000)  # Queue for positions to send
+POSITION_BATCH = {}  # cookie -> latest position dict
+LAST_BATCH_SEND = 0
+BATCH_INTERVAL = 0.9  # Send batch every 900ms (1.1Hz)
+BATCH_LOCK = threading.Lock()
 HTTP_WORKER_THREAD = None
 HTTP_WORKER_RUNNING = False
 
@@ -67,6 +69,26 @@ POSITIONS_QUEUED = 0
 POSITIONS_SENT = 0
 LAST_STATS_PRINT = 0
 STATS_PRINT_INTERVAL = 5.0  # Print stats every 5 seconds
+
+# Detailed timing stats (store last 100 samples)
+TIMING_STATS = {
+    "decode_3d00": [],
+    "xy_to_latlon": [],
+    "identity_lookup": [],
+    "build_payload": [],
+    "parse_identity": [],
+    "parse_other": [],
+    "packet_total": []
+}
+LAST_TIMING_PRINT = 0
+TIMING_PRINT_INTERVAL = 10.0  # Print timing breakdown every 10 seconds
+MAX_TIMING_SAMPLES = 100
+
+# Coordinate conversion cache (reduces NaviCon DLL calls by ~95%)
+COORD_CACHE = {}  # (x_rounded, y_rounded) -> (lat, lon)
+COORD_CACHE_PRECISION = 10.0  # Round to nearest 10 meters
+COORD_CACHE_HITS = 0
+COORD_CACHE_MISSES = 0
 
 
 # ------------------------
@@ -142,22 +164,95 @@ def send_position_to_express(payload: dict) -> None:
     # DO NOT timestamp here - will be timestamped at send time for accuracy
     # payload_to_send.setdefault("timestamp", datetime.datetime.utcnow().isoformat() + "Z")
 
-    # Queue position for async sending (non-blocking)
-    global POSITIONS_QUEUED
-    try:
-        POSITION_QUEUE.put_nowait(payload_to_send)
+    # Store in batch (overwrites previous position for same cookie)
+    global POSITIONS_QUEUED, POSITION_BATCH, LAST_BATCH_SEND, BATCH_LOCK
+    
+    with BATCH_LOCK:
+        POSITION_BATCH[cookie] = payload_to_send
         POSITIONS_QUEUED += 1
-    except queue.Full:
-        # Queue full - drop oldest or skip (fail silently for performance)
-        print(f"[!] WARNING: Position queue FULL ({POSITION_QUEUE.maxsize}), dropping position for cookie {cookie}")
-        pass
+        
+        # Check if it's time to send the batch
+        now = time_module.time()
+        if now - LAST_BATCH_SEND >= BATCH_INTERVAL:
+            flush_position_batch()
+            LAST_BATCH_SEND = now
+
+
+def flush_position_batch() -> None:
+    """Send all batched positions to Express endpoint as an array."""
+    global REQUEST_SESSION, EXPRESS_POST_FAILURES, POSITION_BATCH, SERVER_NAME, SNIFF_PORT
+    global REMOTE_SESSION, REMOTE_POST_FAILURES, POSITIONS_SENT, LAST_STATS_PRINT
+    
+    # Must be called with BATCH_LOCK held
+    if not POSITION_BATCH:
+        return
+    
+    if requests is None:
+        EXPRESS_POST_FAILURES += 1
+        return
+    
+    # Convert batch dict to array
+    positions_array = list(POSITION_BATCH.values())
+    batch_size = len(positions_array)
+    
+    # Add timestamps NOW (at send time)
+    timestamp = datetime.datetime.utcnow().isoformat() + "Z"
+    for pos in positions_array:
+        pos["timestamp"] = timestamp
+    
+    # Clear batch before sending (so new positions can accumulate)
+    POSITION_BATCH.clear()
+    
+    # Prepare custom headers
+    headers = {
+        "X-Server-Name": SERVER_NAME or "",
+        "X-Port-Number": str(SNIFF_PORT)
+    }
+    
+    # Send to Express endpoint
+    send_start = time_module.time()
+    try:
+        if REQUEST_SESSION is None:
+            REQUEST_SESSION = requests.Session()
+            # Disable SSL warnings if verification is disabled
+            if not EXPRESS_VERIFY_SSL:
+                try:
+                    import urllib3
+                    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+                except Exception:
+                    pass
+        
+        REQUEST_SESSION.post(EXPRESS_ENDPOINT, json=positions_array, headers=headers, 
+                           timeout=EXPRESS_TIMEOUT, verify=EXPRESS_VERIFY_SSL)
+        send_duration = time_module.time() - send_start
+        POSITIONS_SENT += batch_size
+        
+        # Print stats periodically
+        now = time_module.time()
+        if now - LAST_STATS_PRINT >= STATS_PRINT_INTERVAL:
+            print(f"[STATS] Queued: {POSITIONS_QUEUED} | Sent: {POSITIONS_SENT} | Batch Size: {batch_size} | Last Send: {send_duration*1000:.1f}ms | Failures: {EXPRESS_POST_FAILURES}")
+            LAST_STATS_PRINT = now
+            
+    except Exception as e:
+        EXPRESS_POST_FAILURES += 1
+        print(f"[!] Express POST failed: {e} (failures: {EXPRESS_POST_FAILURES})")
+    
+    # Send to secondary/backup remote server (if configured)
+    if REMOTE_SERVER_ENDPOINT:
+        try:
+            if REMOTE_SESSION is None:
+                REMOTE_SESSION = requests.Session()
+            REMOTE_SESSION.post(REMOTE_SERVER_ENDPOINT, json=positions_array, headers=headers, 
+                              timeout=EXPRESS_TIMEOUT, verify=REMOTE_VERIFY_SSL)
+        except Exception as e:
+            REMOTE_POST_FAILURES += 1
+            if REMOTE_POST_FAILURES <= 3:
+                print(f"[!] Remote backup POST failed: {e}")
 
 
 def http_worker_thread() -> None:
-    """Background thread that sends positions from queue to HTTP endpoints."""
-    global REQUEST_SESSION, EXPRESS_POST_FAILURES, SERVER_NAME, SNIFF_PORT
-    global REMOTE_SESSION, REMOTE_POST_FAILURES, HTTP_WORKER_RUNNING
-    global POSITIONS_SENT, LAST_STATS_PRINT
+    """Background thread that periodically flushes position batches."""
+    global HTTP_WORKER_RUNNING, LAST_BATCH_SEND, BATCH_LOCK
     
     if requests is None:
         print("[!] ERROR: requests module not available, HTTP worker cannot start")
@@ -167,67 +262,18 @@ def http_worker_thread() -> None:
     print(f"[+] Primary endpoint: {EXPRESS_ENDPOINT}")
     if REMOTE_SERVER_ENDPOINT:
         print(f"[+] Backup endpoint: {REMOTE_SERVER_ENDPOINT}")
-    
-    # Initialize sessions
-    REQUEST_SESSION = requests.Session()
-    if REMOTE_SERVER_ENDPOINT:
-        REMOTE_SESSION = requests.Session()
-    
-    # Disable SSL warnings if verification is disabled
-    if not EXPRESS_VERIFY_SSL or not REMOTE_VERIFY_SSL:
-        try:
-            import urllib3
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        except Exception:
-            pass
-    
-    # Prepare custom headers with server identification
-    headers = {
-        "X-Server-Name": SERVER_NAME or "",
-        "X-Port-Number": str(SNIFF_PORT)
-    }
+    print(f"[+] Batch interval: {BATCH_INTERVAL*1000:.0f}ms (sending latest position per glider)")
     
     while HTTP_WORKER_RUNNING:
         try:
-            # Get position from queue (blocking with timeout)
-            position = POSITION_QUEUE.get(timeout=0.1)
+            time_module.sleep(0.1)  # Check every 100ms
             
-            queue_size = POSITION_QUEUE.qsize()
-            
-            # Add timestamp NOW (at send time, not parse time) for accuracy
-            position["timestamp"] = datetime.datetime.utcnow().isoformat() + "Z"
-            
-            # Send to Express endpoint
-            send_start = time_module.time()
-            try:
-                REQUEST_SESSION.post(EXPRESS_ENDPOINT, json=[position], headers=headers, 
-                                   timeout=EXPRESS_TIMEOUT, verify=EXPRESS_VERIFY_SSL)
-                send_duration = time_module.time() - send_start
-                POSITIONS_SENT += 1
-                
-                # Print stats periodically
-                now = time_module.time()
-                if now - LAST_STATS_PRINT >= STATS_PRINT_INTERVAL:
-                    print(f"[STATS] Queued: {POSITIONS_QUEUED} | Sent: {POSITIONS_SENT} | Queue Size: {queue_size} | Last Send: {send_duration*1000:.1f}ms | Failures: {EXPRESS_POST_FAILURES}")
-                    LAST_STATS_PRINT = now
+            now = time_module.time()
+            if now - LAST_BATCH_SEND >= BATCH_INTERVAL:
+                with BATCH_LOCK:
+                    flush_position_batch()
+                    LAST_BATCH_SEND = now
                     
-            except Exception as e:
-                EXPRESS_POST_FAILURES += 1
-                print(f"[!] Express POST failed: {e} (failures: {EXPRESS_POST_FAILURES})")
-            
-            # Send to secondary/backup remote server (if configured)
-            if REMOTE_SERVER_ENDPOINT:
-                try:
-                    REMOTE_SESSION.post(REMOTE_SERVER_ENDPOINT, json=[position], headers=headers, 
-                                      timeout=EXPRESS_TIMEOUT, verify=REMOTE_VERIFY_SSL)
-                except Exception as e:
-                    REMOTE_POST_FAILURES += 1
-                    if REMOTE_POST_FAILURES <= 3:
-                        print(f"[!] Remote backup POST failed: {e}")
-            
-            POSITION_QUEUE.task_done()
-        except queue.Empty:
-            continue
         except Exception as e:
             print(f"[!] HTTP worker error: {e}")
             pass
@@ -289,6 +335,7 @@ def decode_3d00_payload(payload_hex: str) -> dict:
 
 def parse_telemetry_packet(hex_data: str) -> str:
     """Decodes telemetry packets (0x3d00 and friends)."""
+    global TIMING_STATS
     try:
         msg_type = hex_data[0:4]
         cn_bytes = bytes.fromhex(hex_data[4:8])
@@ -298,18 +345,52 @@ def parse_telemetry_packet(hex_data: str) -> str:
         payload_hex = hex_data[16:]
 
         if msg_type == "3d00":
+            t_start = time_module.time()
             decoded = decode_3d00_payload(payload_hex)
+            t_decode = time_module.time() - t_start
+            TIMING_STATS["decode_3d00"].append(t_decode)
+            if len(TIMING_STATS["decode_3d00"]) > MAX_TIMING_SAMPLES:
+                TIMING_STATS["decode_3d00"].pop(0)
             # Require NaviCon.dll bridge for coordinate conversion
             if navicon_bridge is None:
                 raise RuntimeError("navicon_bridge is required but not available. Ensure navicon_bridge.py is properly configured.")
             
-            # Use the landscape-specific TRN file
-            if LANDSCAPE_TRN_PATH:
-                lat, lon = navicon_bridge.xy_to_latlon_trn(LANDSCAPE_TRN_PATH, decoded["pos_x"], decoded["pos_y"])
+            # Use the landscape-specific TRN file with caching
+            global COORD_CACHE, COORD_CACHE_HITS, COORD_CACHE_MISSES
+            t_start = time_module.time()
+            
+            # Round coordinates to cache precision (10m grid)
+            x_rounded = round(decoded["pos_x"] / COORD_CACHE_PRECISION) * COORD_CACHE_PRECISION
+            y_rounded = round(decoded["pos_y"] / COORD_CACHE_PRECISION) * COORD_CACHE_PRECISION
+            cache_key = (x_rounded, y_rounded)
+            
+            # Check cache first
+            if cache_key in COORD_CACHE:
+                lat, lon = COORD_CACHE[cache_key]
+                COORD_CACHE_HITS += 1
             else:
-                lat, lon = navicon_bridge.xy_to_latlon_default(decoded["pos_x"], decoded["pos_y"])
+                # Cache miss - call DLL
+                if LANDSCAPE_TRN_PATH:
+                    lat, lon = navicon_bridge.xy_to_latlon_trn(LANDSCAPE_TRN_PATH, decoded["pos_x"], decoded["pos_y"])
+                else:
+                    lat, lon = navicon_bridge.xy_to_latlon_default(decoded["pos_x"], decoded["pos_y"])
+                COORD_CACHE[cache_key] = (lat, lon)
+                COORD_CACHE_MISSES += 1
+                
+                # Limit cache size to prevent memory bloat
+                if len(COORD_CACHE) > 10000:
+                    # Remove oldest 20% of entries
+                    keys_to_remove = list(COORD_CACHE.keys())[:2000]
+                    for k in keys_to_remove:
+                        del COORD_CACHE[k]
+            
+            t_latlon = time_module.time() - t_start
+            TIMING_STATS["xy_to_latlon"].append(t_latlon)
+            if len(TIMING_STATS["xy_to_latlon"]) > MAX_TIMING_SAMPLES:
+                TIMING_STATS["xy_to_latlon"].pop(0)
 
             # Identity lookup by cookie
+            t_start = time_module.time()
             cookie = decoded.get("cookie", 0)
             cookie_hex = f"{cookie:08x}"
             ident = COOKIE_MAP.get(cookie)
@@ -340,7 +421,13 @@ def parse_telemetry_packet(hex_data: str) -> str:
                 id_reg = ""
                 id_country = ""
                 identity_line = f"unknown [cookie {cookie_hex}]"
+            
+            t_identity = time_module.time() - t_start
+            TIMING_STATS["identity_lookup"].append(t_identity)
+            if len(TIMING_STATS["identity_lookup"]) > MAX_TIMING_SAMPLES:
+                TIMING_STATS["identity_lookup"].pop(0)
 
+            t_start = time_module.time()
             send_position_to_express({
                 "id": id_decimal,
                 "cn": cn_decimal,
@@ -361,6 +448,10 @@ def parse_telemetry_packet(hex_data: str) -> str:
                 "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
                 "aircraft": id_aircraft,
             })
+            t_build = time_module.time() - t_start
+            TIMING_STATS["build_payload"].append(t_build)
+            if len(TIMING_STATS["build_payload"]) > MAX_TIMING_SAMPLES:
+                TIMING_STATS["build_payload"].pop(0)
 
             output = (
                 f"[+] TELEMETRY PACKET DETECTED\n"
@@ -452,6 +543,8 @@ def persist_identity_map():
         pass
 def parse_identity_packet(hex_data: str) -> str:
     """Decode 0x3f00/0x3f01 identity/config packet and update mappings."""
+    global TIMING_STATS
+    t_start = time_module.time()
     try:
         b = bytes.fromhex(hex_data)
         if len(b) < 20:
@@ -556,6 +649,11 @@ def parse_identity_packet(hex_data: str) -> str:
         }
         ENTITY_TO_COOKIE[entity_id] = cookie
         persist_identity_map()
+        
+        t_parse = time_module.time() - t_start
+        TIMING_STATS["parse_identity"].append(t_parse)
+        if len(TIMING_STATS["parse_identity"]) > MAX_TIMING_SAMPLES:
+            TIMING_STATS["parse_identity"].pop(0)
 
         return (
             f"[+] IDENTITY PACKET DETECTED\n"
@@ -922,6 +1020,10 @@ def _attempt_write_fpl():
 
 def packet_handler(packet):
     """Main handler function for processing each captured packet."""
+    global TIMING_STATS, LAST_TIMING_PRINT
+    
+    t_packet_start = time_module.time()
+    
     if UDP not in packet:
         return
 
@@ -941,18 +1043,80 @@ def packet_handler(packet):
         # Telemetry packets - no logging, just process
         parse_telemetry_packet(hex_data)
     elif hex_data.startswith("1f00"):
+        t_start = time_module.time()
         parse_fpl_task_packet(hex_data)
+        TIMING_STATS["parse_other"].append(time_module.time() - t_start)
     elif hex_data.startswith(("0700", "0f00")):
+        t_start = time_module.time()
         parse_disabled_list_packet(hex_data)
+        TIMING_STATS["parse_other"].append(time_module.time() - t_start)
     elif hex_data.startswith("2f00"):
+        t_start = time_module.time()
         parse_settings_packet(hex_data)
+        TIMING_STATS["parse_other"].append(time_module.time() - t_start)
     elif hex_data.startswith(("3f00", "3f01")):
         # Identity packets - no logging for performance
         parse_identity_packet(hex_data)
     elif hex_data.startswith("8006"):
         # ACK packets - no logging for performance
+        t_start = time_module.time()
         parse_ack_packet(hex_data)
+        TIMING_STATS["parse_other"].append(time_module.time() - t_start)
+    
+    # Track total packet processing time
+    t_packet_total = time_module.time() - t_packet_start
+    TIMING_STATS["packet_total"].append(t_packet_total)
+    if len(TIMING_STATS["packet_total"]) > MAX_TIMING_SAMPLES:
+        TIMING_STATS["packet_total"].pop(0)
+    
+    # Print timing breakdown periodically
+    now = time_module.time()
+    if now - LAST_TIMING_PRINT >= TIMING_PRINT_INTERVAL:
+        print_timing_stats()
+        LAST_TIMING_PRINT = now
 
+
+def print_timing_stats():
+    """Print detailed timing breakdown."""
+    global TIMING_STATS
+    
+    def avg_ms(samples):
+        if not samples:
+            return 0.0
+        return (sum(samples) / len(samples)) * 1000
+    
+    def max_ms(samples):
+        if not samples:
+            return 0.0
+        return max(samples) * 1000
+    
+    global COORD_CACHE_HITS, COORD_CACHE_MISSES
+    
+    print("\n" + "="*70)
+    print("[TIMING BREAKDOWN] Average (Max) per operation:")
+    print("="*70)
+    print(f"  decode_3d00:      {avg_ms(TIMING_STATS['decode_3d00']):6.2f}ms ({max_ms(TIMING_STATS['decode_3d00']):6.2f}ms) - Parse telemetry binary")
+    print(f"  xy_to_latlon:     {avg_ms(TIMING_STATS['xy_to_latlon']):6.2f}ms ({max_ms(TIMING_STATS['xy_to_latlon']):6.2f}ms) - NaviCon DLL call")
+    print(f"  identity_lookup:  {avg_ms(TIMING_STATS['identity_lookup']):6.2f}ms ({max_ms(TIMING_STATS['identity_lookup']):6.2f}ms) - Identity dict lookup")
+    print(f"  build_payload:    {avg_ms(TIMING_STATS['build_payload']):6.2f}ms ({max_ms(TIMING_STATS['build_payload']):6.2f}ms) - Build & queue position")
+    print(f"  parse_identity:   {avg_ms(TIMING_STATS['parse_identity']):6.2f}ms ({max_ms(TIMING_STATS['parse_identity']):6.2f}ms) - Parse identity packets")
+    print(f"  parse_other:      {avg_ms(TIMING_STATS['parse_other']):6.2f}ms ({max_ms(TIMING_STATS['parse_other']):6.2f}ms) - Other packet types")
+    print(f"  packet_total:     {avg_ms(TIMING_STATS['packet_total']):6.2f}ms ({max_ms(TIMING_STATS['packet_total']):6.2f}ms) - TOTAL per packet")
+    print("="*70)
+    
+    # Calculate CPU usage estimate
+    if TIMING_STATS['packet_total']:
+        avg_packet_time = avg_ms(TIMING_STATS['packet_total'])
+        packets_per_sec = len(TIMING_STATS['packet_total']) / TIMING_PRINT_INTERVAL
+        cpu_usage_pct = (avg_packet_time / 1000) * packets_per_sec * 100
+        print(f"  Packet rate: {packets_per_sec:.1f} pkt/s | Est. CPU usage: {cpu_usage_pct:.1f}%")
+    
+    # Coordinate cache stats
+    total_lookups = COORD_CACHE_HITS + COORD_CACHE_MISSES
+    if total_lookups > 0:
+        cache_hit_rate = (COORD_CACHE_HITS / total_lookups) * 100
+        print(f"  Coord cache: {len(COORD_CACHE)} entries | Hit rate: {cache_hit_rate:.1f}% ({COORD_CACHE_HITS}/{total_lookups})")
+    print("="*70 + "\n")
 
 def main():
     """Sets up packet sniffer with async HTTP worker."""
@@ -1013,7 +1177,18 @@ def main():
         print(f"[+] SSL verify: {EXPRESS_VERIFY_SSL}")
         print("="*60)
         
-        # Start HTTP worker thread for async position sending
+        # Initialize timing stats and cache
+        global LAST_TIMING_PRINT, COORD_CACHE, COORD_CACHE_HITS, COORD_CACHE_MISSES
+        LAST_TIMING_PRINT = time_module.time()
+        COORD_CACHE.clear()
+        COORD_CACHE_HITS = 0
+        COORD_CACHE_MISSES = 0
+        
+        # Initialize batch sending
+        global LAST_BATCH_SEND
+        LAST_BATCH_SEND = time_module.time()
+        
+        # Start HTTP worker thread for periodic batch sending
         HTTP_WORKER_RUNNING = True
         HTTP_WORKER_THREAD = threading.Thread(target=http_worker_thread, daemon=True)
         HTTP_WORKER_THREAD.start()
