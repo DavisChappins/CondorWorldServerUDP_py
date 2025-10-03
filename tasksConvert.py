@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 import json
 import configparser
+import requests
 
 try:
     import navicon_bridge
@@ -45,7 +46,36 @@ def convert_xy_to_latlon(landscape_code, x, y):
         print(f"  ERROR: Coordinate conversion failed: {e}")
         return None, None
 
-def parse_fpl_file(fpl_path):
+def fetch_server_names():
+    """Fetch list of configured server names from the dashboard API or local config.json as fallback"""
+    # First try the running dashboard API
+    host = os.getenv('DASHBOARD_HOST', '127.0.0.1')
+    port = os.getenv('DASHBOARD_PORT', '5001')
+    url = f"http://{host}:{port}/api/servers"
+    try:
+        resp = requests.get(url, timeout=2.0)
+        if resp.ok:
+            servers = resp.json()
+            names = [s.get('server_name') for s in servers if s.get('server_name')]
+            return names
+    except Exception:
+        pass
+    
+    # Fallback: read config.json in the same directory as this script
+    try:
+        config_path = Path(__file__).parent / 'config.json'
+        if config_path.exists():
+            with open(config_path, 'r', encoding='utf-8') as f:
+                cfg = json.load(f)
+                servers = cfg.get('servers', [])
+                names = [s.get('server_name') for s in servers if s.get('server_name')]
+                return names
+    except Exception:
+        pass
+    
+    return []
+
+def parse_fpl_file(fpl_path, server_names=None):
     """Parse a Condor .fpl file and extract relevant task information"""
     print(f"Parsing: {fpl_path.name}")
     
@@ -108,6 +138,8 @@ def parse_fpl_file(fpl_path):
         
         if actual_count < 1:
             print(f"  WARNING: Task has less than 1 turnpoint")
+            # Append servers at the end for readability
+            task_data['servers'] = list(server_names or [])
             return task_data
         
         # Check if we can convert coordinates
@@ -161,6 +193,8 @@ def parse_fpl_file(fpl_path):
             else:
                 print(f"  TP{human_index}: {display_name} (XY: {tp_pos_x}, {tp_pos_y}) - Radius: {tp_radius}m")
         
+        # Append servers at the end for readability (after Turnpoints)
+        task_data['servers'] = list(server_names or [])
         return task_data
         
     except Exception as e:
@@ -283,6 +317,13 @@ def convert_all_fpl_files():
         print(f"ERROR: Flightplans directory not found: {flightplans_dir}")
         return
     
+    # Fetch server names once to avoid multiple API calls
+    server_names = fetch_server_names()
+    if server_names:
+        print(f"Found {len(server_names)} server(s) from dashboard: {', '.join(server_names)}")
+    else:
+        print("No servers found from dashboard/config (this is OK)")
+    
     # Find all .fpl files
     fpl_files = list(flightplans_dir.glob("*.fpl"))
     
@@ -297,7 +338,7 @@ def convert_all_fpl_files():
     for fpl_path in fpl_files:
         try:
             # Parse the FPL file
-            task_data = parse_fpl_file(fpl_path)
+            task_data = parse_fpl_file(fpl_path, server_names=server_names)
             
             if task_data is None:
                 continue
