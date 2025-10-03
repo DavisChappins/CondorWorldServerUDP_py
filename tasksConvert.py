@@ -71,12 +71,37 @@ def parse_fpl_file(fpl_path):
         task_data['TaskName'] = task_section.get('TaskName', '')
         task_data['Landscape'] = task_section.get('Landscape', '')
         
+        # Extract task type and related settings from GameOptions (if it exists)
+        if 'GameOptions' in config:
+            game_options = config['GameOptions']
+            is_aat = int(game_options.get('AAT', '0')) == 1
+            task_data['TaskType'] = 'AAT' if is_aat else 'Racing'
+            
+            # AAT time (only if AAT task)
+            if is_aat:
+                aat_time = float(game_options.get('AATTime', '0'))
+                task_data['AATTimeHours'] = aat_time
+            else:
+                task_data['AATTimeHours'] = None
+            
+            # Start window settings
+            start_window_hours = float(game_options.get('StartTimeWindow', '0'))
+            start_window_minutes = round(start_window_hours * 60)
+            task_data['StartWindowMinutes'] = start_window_minutes
+            task_data['RegattaStart'] = (start_window_minutes == 0)
+        else:
+            # Default values if GameOptions section is missing
+            task_data['TaskType'] = 'Racing'
+            task_data['AATTimeHours'] = None
+            task_data['StartWindowMinutes'] = 0
+            task_data['RegattaStart'] = True
+        
         # Get original count (includes takeoff point at index 0)
         original_count = int(task_section.get('Count', 0))
         # Actual turnpoint count excludes the takeoff (index 0)
         actual_count = original_count - 1
         
-        task_data['Count'] = actual_count
+        task_data['TPCount'] = actual_count
         task_data['Turnpoints'] = []
         
         landscape = task_data['Landscape']
@@ -143,7 +168,7 @@ def parse_fpl_file(fpl_path):
         return None
 
 def update_tasks_json_with_taskids(script_dir, flightplans_dir):
-    """Update tasks.json with TaskID from converted flight plan JSONs"""
+    """Update tasks.json with TaskID from converted flight plan JSONs AND add DSHelperStartTime to flight plan JSONs"""
     tasks_json_path = script_dir / "tasks.json"
     
     # Check if tasks.json exists
@@ -152,7 +177,7 @@ def update_tasks_json_with_taskids(script_dir, flightplans_dir):
         return
     
     print("\n" + "=" * 60)
-    print("Updating tasks.json with TaskIDs")
+    print("Updating tasks.json with TaskIDs and adding DSHelperStartTime to flight plans")
     print("=" * 60)
     
     try:
@@ -164,7 +189,8 @@ def update_tasks_json_with_taskids(script_dir, flightplans_dir):
             print("ERROR: tasks.json is not a list")
             return
         
-        updated_count = 0
+        updated_tasks_count = 0
+        updated_fpl_count = 0
         
         # For each task, try to find the corresponding flight plan JSON
         for task in tasks:
@@ -187,7 +213,7 @@ def update_tasks_json_with_taskids(script_dir, flightplans_dir):
                 with open(json_path, 'r', encoding='utf-8') as f:
                     fpl_data = json.load(f)
                 
-                # Extract CondorClubTaskID and insert after 'id'
+                # Extract CondorClubTaskID and insert after 'id' in tasks.json
                 condor_task_id = fpl_data.get('CondorClubTaskID')
                 if condor_task_id:
                     # Rebuild task dict with CondorClubTaskID right after 'id'
@@ -202,24 +228,44 @@ def update_tasks_json_with_taskids(script_dir, flightplans_dir):
                     task.update(new_task)
                     
                     print(f"  Updated task '{task.get('description', 'unknown')}' with CondorClubTaskID: {condor_task_id}")
-                    updated_count += 1
+                    updated_tasks_count += 1
                 else:
                     print(f"  No CondorClubTaskID found in {json_filename} (this is OK)")
+                
+                # Add DSHelperStartTime to the flight plan JSON (insert after TaskName)
+                start_time = task.get('startTime')
+                if start_time and 'DSHelperStartTime' not in fpl_data:
+                    # Rebuild fpl_data with DSHelperStartTime after TaskName
+                    new_fpl_data = {}
+                    for key, value in fpl_data.items():
+                        new_fpl_data[key] = value
+                        if key == 'TaskName':
+                            new_fpl_data['DSHelperStartTime'] = start_time
+                    
+                    # Save the updated flight plan JSON
+                    with open(json_path, 'w', encoding='utf-8') as f:
+                        json.dump(new_fpl_data, f, indent=2, ensure_ascii=False)
+                    
+                    print(f"    Added DSHelperStartTime to {json_filename}")
+                    updated_fpl_count += 1
                     
             except Exception as e:
-                print(f"  ERROR: Failed to read {json_filename}: {e}")
+                print(f"  ERROR: Failed to process {json_filename}: {e}")
                 continue
         
         # Save updated tasks.json
-        if updated_count > 0:
+        if updated_tasks_count > 0:
             with open(tasks_json_path, 'w', encoding='utf-8') as f:
                 json.dump(tasks, f, indent=2, ensure_ascii=False)
-            print(f"\nUpdated {updated_count} task(s) in tasks.json")
+            print(f"\nUpdated {updated_tasks_count} task(s) in tasks.json")
         else:
-            print("\nNo tasks were updated")
+            print("\nNo tasks were updated in tasks.json")
+        
+        if updated_fpl_count > 0:
+            print(f"Updated {updated_fpl_count} flight plan(s) with DSHelperStartTime")
             
     except Exception as e:
-        print(f"ERROR: Failed to update tasks.json: {e}")
+        print(f"ERROR: Failed to update: {e}")
 
 def convert_all_fpl_files():
     """Convert all .fpl files in the flightplans directory to JSON"""
