@@ -123,14 +123,52 @@ def _get_or_start_process(trn_path: str) -> subprocess.Popen:
 
 def _query_persistent_process(proc: subprocess.Popen, x: float, y: float, timeout: float) -> Tuple[float, float]:
     """Query the persistent process for a coordinate conversion."""
+    import select
+    
     with _process_lock:
         # Send query
         query = f"{x} {y}\n"
-        proc.stdin.write(query)
-        proc.stdin.flush()
+        try:
+            proc.stdin.write(query)
+            proc.stdin.flush()
+        except Exception as e:
+            raise RuntimeError(f"Failed to write to helper process: {e}")
         
-        # Read response
-        response = proc.stdout.readline().strip()
+        # Read response with timeout
+        if os.name == 'nt':
+            # Windows doesn't support select on pipes, use threading
+            import queue
+            result_queue = queue.Queue()
+            
+            def read_line():
+                try:
+                    line = proc.stdout.readline()
+                    result_queue.put(('success', line))
+                except Exception as e:
+                    result_queue.put(('error', str(e)))
+            
+            reader_thread = threading.Thread(target=read_line, daemon=True)
+            reader_thread.start()
+            
+            try:
+                result_type, result_data = result_queue.get(timeout=timeout)
+                if result_type == 'error':
+                    raise RuntimeError(f"Failed to read from helper: {result_data}")
+                response = result_data.strip()
+            except:
+                # Timeout or error - kill the process
+                proc.kill()
+                raise TimeoutError(f"Helper process timed out after {timeout}s")
+        else:
+            # Unix: use select
+            ready, _, _ = select.select([proc.stdout], [], [], timeout)
+            if not ready:
+                proc.kill()
+                raise TimeoutError(f"Helper process timed out after {timeout}s")
+            response = proc.stdout.readline().strip()
+        
+        if not response:
+            raise RuntimeError("Helper returned empty response")
         
         if response.startswith("ERROR"):
             raise RuntimeError(f"Helper returned error: {response}")
@@ -147,8 +185,17 @@ def _query_persistent_process(proc: subprocess.Popen, x: float, y: float, timeou
 
 def _run_helper_oneshot(trn_path: str, x: float, y: float, timeout: float) -> Tuple[float, float]:
     """Fallback: run the original one-shot helper (for non-persistent exe)."""
-    exe = _helper_exe_path()
-    cmd = [exe, trn_path, str(float(x)), str(float(y))]
+    # For one-shot, we need the non-persistent exe
+    exe_oneshot = os.path.join(_project_root(), "Condor3XY2LatLon.exe")
+    
+    if not os.path.exists(exe_oneshot):
+        raise FileNotFoundError(
+            f"One-shot helper not found: {exe_oneshot}\n"
+            f"The persistent exe cannot be used in one-shot mode.\n"
+            f"Please compile Condor3XY2LatLon.cpp to create the one-shot version."
+        )
+    
+    cmd = [exe_oneshot, trn_path, str(float(x)), str(float(y))]
     
     startupinfo = None
     creationflags = 0
@@ -204,8 +251,18 @@ def _run_helper(trn_path: str, x: float, y: float, timeout: float) -> Tuple[floa
         return _run_helper_oneshot(trn_path, x, y, timeout)
 
 
-def xy_to_latlon_trn(trn_path: str, x: float, y: float, timeout: float = 0.5) -> Tuple[float, float]:
-    """Call helper with an explicit .trn path. Returns (lat, lon)."""
+def xy_to_latlon_trn(trn_path: str, x: float, y: float, timeout: float = 0.5, force_oneshot: bool = False) -> Tuple[float, float]:
+    """Call helper with an explicit .trn path. Returns (lat, lon).
+    
+    Args:
+        trn_path: Path to the .trn file
+        x: X coordinate
+        y: Y coordinate
+        timeout: Timeout in seconds
+        force_oneshot: If True, always use one-shot mode (slower but more reliable for batch processing)
+    """
+    if force_oneshot:
+        return _run_helper_oneshot(trn_path, x, y, timeout)
     return _run_helper(trn_path, x, y, timeout)
 
 

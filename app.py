@@ -35,7 +35,7 @@ auto_start_lock = threading.Lock()
 # Task sync tracking
 last_task_sync_time = None
 task_sync_lock = threading.Lock()
-TASK_SYNC_COOLDOWN = 300  # 5 minutes in seconds
+TASK_SYNC_COOLDOWN = 1800  # 30 minutes in seconds
 
 
 # ============================================================================
@@ -374,6 +374,14 @@ def run_task_sync_sequence():
         
         try:
             # Run the script and capture output with UTF-8 encoding
+            # Timeout: tasksGet=60s, tasksConvert=300s (5min for many files), tasksUpload=120s
+            timeout_map = {
+                'tasksGet.py': 60,
+                'tasksConvert.py': 300,  # 5 minutes for converting many flight plans
+                'tasksUpload.py': 120
+            }
+            timeout = timeout_map.get(script_name, 60)
+            
             result = subprocess.run(
                 [sys.executable, script_path],
                 cwd=SCRIPT_DIR,
@@ -381,7 +389,7 @@ def run_task_sync_sequence():
                 text=True,
                 encoding='utf-8',
                 errors='replace',  # Replace characters that can't be decoded
-                timeout=60  # 60 second timeout per script
+                timeout=timeout
             )
             
             # Print stdout
@@ -403,7 +411,7 @@ def run_task_sync_sequence():
                 return  # Stop the sequence on error
         
         except subprocess.TimeoutExpired:
-            print(f"[TASK-SYNC] {script_name} timed out after 60 seconds")
+            print(f"[TASK-SYNC] {script_name} timed out after {timeout} seconds")
             print(f"[TASK-SYNC] Stopping sequence - cannot proceed without {script_name}")
             return  # Stop the sequence on timeout
         except Exception as e:

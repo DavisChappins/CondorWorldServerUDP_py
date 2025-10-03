@@ -40,8 +40,14 @@ def convert_xy_to_latlon(landscape_code, x, y):
         return None, None
     
     try:
-        lat, lon = navicon_bridge.xy_to_latlon_trn(trn_path, float(x), float(y))
+        # Use one-shot mode (force_oneshot=True) for batch conversion
+        # This is slower but more reliable when switching between different TRN files
+        # The persistent process can get stuck when changing landscapes
+        lat, lon = navicon_bridge.xy_to_latlon_trn(trn_path, float(x), float(y), timeout=5.0, force_oneshot=True)
         return lat, lon
+    except TimeoutError as e:
+        print(f"  ERROR: Coordinate conversion timed out: {e}")
+        return None, None
     except Exception as e:
         print(f"  ERROR: Coordinate conversion failed: {e}")
         return None, None
@@ -53,26 +59,35 @@ def fetch_server_names():
     port = os.getenv('DASHBOARD_PORT', '5001')
     url = f"http://{host}:{port}/api/servers"
     try:
+        print(f"  Attempting to fetch server names from dashboard API...")
         resp = requests.get(url, timeout=2.0)
         if resp.ok:
             servers = resp.json()
             names = [s.get('server_name') for s in servers if s.get('server_name')]
+            print(f"  Successfully fetched {len(names)} server names from API")
             return names
-    except Exception:
-        pass
+        else:
+            print(f"  Dashboard API returned status {resp.status_code}, trying config.json...")
+    except Exception as e:
+        print(f"  Dashboard API not available ({type(e).__name__}), trying config.json...")
     
     # Fallback: read config.json in the same directory as this script
     try:
         config_path = Path(__file__).parent / 'config.json'
         if config_path.exists():
+            print(f"  Reading server names from config.json...")
             with open(config_path, 'r', encoding='utf-8') as f:
                 cfg = json.load(f)
                 servers = cfg.get('servers', [])
                 names = [s.get('server_name') for s in servers if s.get('server_name')]
+                print(f"  Found {len(names)} server names in config.json")
                 return names
-    except Exception:
-        pass
+        else:
+            print(f"  config.json not found at {config_path}")
+    except Exception as e:
+        print(f"  Error reading config.json: {e}")
     
+    print(f"  No server names found, continuing without them")
     return []
 
 def parse_fpl_file(fpl_path, server_names=None):
@@ -335,12 +350,14 @@ def convert_all_fpl_files():
     
     converted_count = 0
     
-    for fpl_path in fpl_files:
+    for idx, fpl_path in enumerate(fpl_files, 1):
         try:
+            print(f"[{idx}/{len(fpl_files)}] Processing {fpl_path.name}...")
             # Parse the FPL file
             task_data = parse_fpl_file(fpl_path, server_names=server_names)
             
             if task_data is None:
+                print(f"  Skipped (parse returned None)\n")
                 continue
             
             # Create JSON output path (same name but .json extension)
@@ -354,7 +371,10 @@ def convert_all_fpl_files():
             converted_count += 1
             
         except Exception as e:
-            print(f"ERROR: Failed to process {fpl_path.name}: {e}\n")
+            print(f"ERROR: Failed to process {fpl_path.name}: {e}")
+            import traceback
+            traceback.print_exc()
+            print()
             continue
     
     print("=" * 60)
@@ -362,7 +382,14 @@ def convert_all_fpl_files():
     print("=" * 60)
     
     # Update tasks.json with TaskIDs if it exists
-    update_tasks_json_with_taskids(script_dir, flightplans_dir)
+    print(f"\nStarting tasks.json update...")
+    try:
+        update_tasks_json_with_taskids(script_dir, flightplans_dir)
+        print(f"tasks.json update completed")
+    except Exception as e:
+        print(f"ERROR during tasks.json update: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
     convert_all_fpl_files()
