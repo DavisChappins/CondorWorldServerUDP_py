@@ -28,6 +28,10 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
 LANDSCAPES_PATH = r"C:\Condor3\Landscapes"
 
+# Auto-start tracking
+auto_start_countdowns = {}  # {server_id: countdown_seconds}
+auto_start_lock = threading.Lock()
+
 
 # ============================================================================
 # Landscape Management
@@ -180,6 +184,12 @@ def is_process_running(pid):
 
 def get_process_status(server):
     """Determine the current status of a server's sniffer process"""
+    # Check if in auto-start countdown
+    with auto_start_lock:
+        if server['id'] in auto_start_countdowns:
+            countdown = auto_start_countdowns[server['id']]
+            return f'starting_{countdown}'
+    
     pid = server.get('pid')
     
     # Check if process exists
@@ -387,10 +397,11 @@ def api_get_servers():
     
     # Update status for each server
     for server in servers:
-        server['status'] = get_process_status(server)
-    
-    # Save updated statuses
-    config.save()
+        status = get_process_status(server)
+        server['status'] = status
+        # Don't save countdown statuses to config
+        if not status.startswith('starting_'):
+            config.update_server(server['id'], {'status': status})
     
     return jsonify(servers)
 
@@ -631,6 +642,12 @@ DASHBOARD_HTML = """
         .status-error {
             background: #dc3545;
             box-shadow: 0 0 12px rgba(220, 53, 69, 0.6);
+        }
+        
+        .status-starting {
+            background: #ffc107;
+            animation: pulse 1s infinite;
+            box-shadow: 0 0 12px rgba(255, 193, 7, 0.8);
         }
         
         @keyframes pulse {
@@ -899,10 +916,19 @@ DASHBOARD_HTML = """
             }
             
             tbody.innerHTML = servers.map(server => {
-                const statusClass = `status-${server.status}`;
-                const statusText = server.status.charAt(0).toUpperCase() + server.status.slice(1);
+                // Handle countdown status
+                let statusClass, statusText, isRunning;
+                if (server.status.startsWith('starting_')) {
+                    const countdown = server.status.split('_')[1];
+                    statusClass = 'status-starting';
+                    statusText = `Starting in ${countdown}s`;
+                    isRunning = true; // Disable controls during countdown
+                } else {
+                    statusClass = `status-${server.status}`;
+                    statusText = server.status.charAt(0).toUpperCase() + server.status.slice(1);
+                    isRunning = server.status !== 'off';
+                }
                 const pid = server.pid || '—';
-                const isRunning = server.status !== 'off';
                 
                 const landscape = server.landscape || 'AA3';
                 const landscapeDisabled = isRunning ? 'disabled' : '';
@@ -1076,8 +1102,46 @@ DASHBOARD_HTML = """
             return div.innerHTML;
         }
         
-        // Auto-refresh every 10 seconds
-        setInterval(fetchServers, 10000);
+        // Smart auto-refresh: 1s during countdown, 10s when stable
+        let refreshInterval = null;
+        let currentRefreshRate = 1000;
+        let lastCountdownEndTime = null;
+        
+        function smartRefresh() {
+            fetchServers().then(() => {
+                // Check if any server is in countdown/starting state
+                const hasCountdown = servers.some(s => s.status.startsWith('starting_'));
+                
+                // Track when countdown ends
+                if (hasCountdown) {
+                    lastCountdownEndTime = null; // Reset if still counting down
+                } else if (lastCountdownEndTime === null && currentRefreshRate === 1000) {
+                    // Countdown just ended, record the time
+                    lastCountdownEndTime = Date.now();
+                    console.log('All servers started. Will switch to 10s refresh in 5 seconds...');
+                }
+                
+                // Determine new refresh rate
+                let newRefreshRate = 1000;
+                if (!hasCountdown && lastCountdownEndTime !== null) {
+                    const timeSinceEnd = Date.now() - lastCountdownEndTime;
+                    if (timeSinceEnd >= 5000) {
+                        newRefreshRate = 10000; // Switch to 10s after 5s delay
+                    }
+                }
+                
+                // Update interval if rate changed
+                if (newRefreshRate !== currentRefreshRate) {
+                    currentRefreshRate = newRefreshRate;
+                    clearInterval(refreshInterval);
+                    refreshInterval = setInterval(smartRefresh, currentRefreshRate);
+                    console.log(`Refresh rate changed to ${currentRefreshRate}ms`);
+                }
+            });
+        }
+        
+        // Start with 1s refresh (for initial countdown)
+        refreshInterval = setInterval(smartRefresh, 1000);
         
         // Initial load
         fetchLandscapes();
@@ -1091,6 +1155,67 @@ DASHBOARD_HTML = """
 # ============================================================================
 # Main Entry Point
 # ============================================================================
+
+def auto_start_server_with_countdown(server, delay_seconds):
+    """Auto-start a server after a countdown delay"""
+    server_id = server['id']
+    server_name = server['server_name']
+    
+    print(f"[AUTO-START] {server_name} will start in {delay_seconds} seconds...")
+    
+    # Countdown loop
+    for remaining in range(delay_seconds, 0, -1):
+        with auto_start_lock:
+            auto_start_countdowns[server_id] = remaining
+        print(f"[AUTO-START] {server_name}: Starting in {remaining}...")
+        time.sleep(1)
+    
+    # Remove from countdown tracking
+    with auto_start_lock:
+        auto_start_countdowns.pop(server_id, None)
+    
+    # Start the server
+    print(f"[AUTO-START] {server_name}: Starting now!")
+    result = start_sniffer(server)
+    
+    if result['success']:
+        print(f"[AUTO-START] {server_name}: Successfully started (PID: {result['pid']})")
+    else:
+        print(f"[AUTO-START] {server_name}: Failed to start - {result.get('error', 'Unknown error')}")
+
+
+def start_auto_start_sequence():
+    """Start all servers from config with staggered delays"""
+    servers = config.get_all_servers()
+    
+    if not servers:
+        print("[AUTO-START] No servers configured. Skipping auto-start.")
+        return
+    
+    print("\n" + "=" * 60)
+    print(f"[AUTO-START] Found {len(servers)} server(s) in config")
+    print("=" * 60)
+    
+    # Start each server in a separate thread with staggered delays
+    for index, server in enumerate(servers):
+        # Skip servers that are already running
+        if server.get('pid') and is_process_running(server['pid']):
+            print(f"[AUTO-START] {server['server_name']}: Already running (PID: {server['pid']}), skipping")
+            continue
+        
+        # Calculate delay: first server at 5s, second at 10s, third at 15s, etc.
+        delay = (index + 1) * 5
+        
+        # Start countdown thread
+        thread = threading.Thread(
+            target=auto_start_server_with_countdown,
+            args=(server, delay),
+            daemon=True
+        )
+        thread.start()
+    
+    print("=" * 60 + "\n")
+
 
 def print_reminder(host, port, stop_event):
     """Print periodic reminder to keep window open and visit dashboard"""
@@ -1125,6 +1250,9 @@ if __name__ == '__main__':
         
         # Print initial reminder
         print(f"\n*** Keep this window open! Go to http://{host}:{port} to configure and manage your servers ***\n")
+        
+        # Start auto-start sequence for configured servers
+        start_auto_start_sequence()
         
         # Start reminder thread
         stop_event = threading.Event()
