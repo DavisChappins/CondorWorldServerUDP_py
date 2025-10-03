@@ -1,7 +1,8 @@
 # Ignore logs directory
 logs/
 
-
+# Ignore flightplans directory
+flightplans/
 
 # Ignore other JSON files in root
 *.json
