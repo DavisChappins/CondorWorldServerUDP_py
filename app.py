@@ -32,6 +32,11 @@ LANDSCAPES_PATH = r"C:\Condor3\Landscapes"
 auto_start_countdowns = {}  # {server_id: countdown_seconds}
 auto_start_lock = threading.Lock()
 
+# Task sync tracking
+last_task_sync_time = None
+task_sync_lock = threading.Lock()
+TASK_SYNC_COOLDOWN = 300  # 5 minutes in seconds
+
 
 # ============================================================================
 # Landscape Management
@@ -320,12 +325,101 @@ def start_sniffer(server):
             'last_error': None
         })
         
+        # Trigger task sync after starting
+        trigger_task_sync_async()
+        
         return {'success': True, 'pid': pid}
     
     except FileNotFoundError:
         return {'success': False, 'error': 'sniffAndDecodeUDP_toExpress_viaFlask.py not found'}
     except Exception as e:
         return {'success': False, 'error': str(e)}
+
+
+def run_task_sync_sequence():
+    """Run tasksGet.py -> tasksConvert.py -> tasksUpload.py in sequence"""
+    global last_task_sync_time
+    
+    with task_sync_lock:
+        # Check cooldown
+        if last_task_sync_time is not None:
+            elapsed = time.time() - last_task_sync_time
+            if elapsed < TASK_SYNC_COOLDOWN:
+                remaining = int(TASK_SYNC_COOLDOWN - elapsed)
+                print(f"[TASK-SYNC] Skipping - cooldown active ({remaining}s remaining)")
+                return
+        
+        # Update last sync time
+        last_task_sync_time = time.time()
+    
+    print("\n" + "=" * 60)
+    print("[TASK-SYNC] Starting task synchronization sequence")
+    print("=" * 60)
+    
+    scripts = [
+        ('tasksGet.py', 'Fetching tasks from scheduler'),
+        ('tasksConvert.py', 'Converting flight plans'),
+        ('tasksUpload.py', 'Uploading tasks to server')
+    ]
+    
+    for script_name, description in scripts:
+        script_path = os.path.join(SCRIPT_DIR, script_name)
+        
+        if not os.path.exists(script_path):
+            print(f"[TASK-SYNC] ERROR: {script_name} not found at {script_path}")
+            continue
+        
+        print(f"\n[TASK-SYNC] Running {script_name}: {description}")
+        print(f"[TASK-SYNC] {'=' * 50}")
+        
+        try:
+            # Run the script and capture output with UTF-8 encoding
+            result = subprocess.run(
+                [sys.executable, script_path],
+                cwd=SCRIPT_DIR,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',  # Replace characters that can't be decoded
+                timeout=60  # 60 second timeout per script
+            )
+            
+            # Print stdout
+            if result.stdout:
+                for line in result.stdout.strip().split('\n'):
+                    print(f"[TASK-SYNC] {line}")
+            
+            # Print stderr if there were errors
+            if result.stderr:
+                for line in result.stderr.strip().split('\n'):
+                    print(f"[TASK-SYNC] ERROR: {line}")
+            
+            # Check return code
+            if result.returncode == 0:
+                print(f"[TASK-SYNC] {script_name} completed successfully")
+            else:
+                print(f"[TASK-SYNC] {script_name} failed with exit code {result.returncode}")
+                print(f"[TASK-SYNC] Stopping sequence - cannot proceed without {script_name}")
+                return  # Stop the sequence on error
+        
+        except subprocess.TimeoutExpired:
+            print(f"[TASK-SYNC] {script_name} timed out after 60 seconds")
+            print(f"[TASK-SYNC] Stopping sequence - cannot proceed without {script_name}")
+            return  # Stop the sequence on timeout
+        except Exception as e:
+            print(f"[TASK-SYNC] {script_name} error: {e}")
+            print(f"[TASK-SYNC] Stopping sequence - cannot proceed without {script_name}")
+            return  # Stop the sequence on exception
+    
+    print("\n" + "=" * 60)
+    print("[TASK-SYNC] Task synchronization sequence complete")
+    print("=" * 60 + "\n")
+
+
+def trigger_task_sync_async():
+    """Trigger task sync in a background thread"""
+    thread = threading.Thread(target=run_task_sync_sequence, daemon=True)
+    thread.start()
 
 
 def stop_sniffer(server):
@@ -373,6 +467,9 @@ def stop_sniffer(server):
             'pid': None,
             'status': 'off'
         })
+        
+        # Trigger task sync after stopping
+        trigger_task_sync_async()
         
         return {'success': True, 'message': 'Process stopped'}
     

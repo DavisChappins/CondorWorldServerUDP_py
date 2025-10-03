@@ -65,17 +65,17 @@ def upload_tasks(tasks, api_base_url="https://server.condormap.com/api"):
             response = requests.post(url, json=task, headers=headers, timeout=10)
             
             if response.ok:
-                print(f"  ✓ SUCCESS: Task uploaded (Status: {response.status_code})")
+                print(f"  SUCCESS: Task uploaded (Status: {response.status_code})")
                 try:
                     print(f"  Response: {response.json()}")
                 except:
                     print(f"  Response: {response.text}")
             else:
-                print(f"  ✗ FAILED: Status {response.status_code}")
+                print(f"  FAILED: Status {response.status_code}")
                 print(f"  Response: {response.text}")
                 
         except requests.exceptions.RequestException as e:
-            print(f"  ✗ ERROR: Failed to upload task: {e}")
+            print(f"  ERROR: Failed to upload task: {e}")
     
     else:
         # Bulk upload
@@ -91,17 +91,17 @@ def upload_tasks(tasks, api_base_url="https://server.condormap.com/api"):
             response = requests.post(url, json=payload, headers=headers, timeout=10)
             
             if response.ok:
-                print(f"\n  ✓ SUCCESS: All tasks uploaded (Status: {response.status_code})")
+                print(f"\n  SUCCESS: All tasks uploaded (Status: {response.status_code})")
                 try:
                     print(f"  Response: {response.json()}")
                 except:
                     print(f"  Response: {response.text}")
             else:
-                print(f"\n  ✗ FAILED: Status {response.status_code}")
+                print(f"\n  FAILED: Status {response.status_code}")
                 print(f"  Response: {response.text}")
                 
         except requests.exceptions.RequestException as e:
-            print(f"\n  ✗ ERROR: Failed to upload tasks: {e}")
+            print(f"\n  ERROR: Failed to upload tasks: {e}")
 
 
 def main():
