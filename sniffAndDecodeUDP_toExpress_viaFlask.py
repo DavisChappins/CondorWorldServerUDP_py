@@ -1055,8 +1055,11 @@ def packet_handler(packet):
         parse_settings_packet(hex_data)
         TIMING_STATS["parse_other"].append(time_module.time() - t_start)
     elif hex_data.startswith(("3f00", "3f01")):
-        # Identity packets - no logging for performance
+        # Identity packets - log to file for debugging
         parse_identity_packet(hex_data)
+        if HEX_LOG_3F_FILE:
+            HEX_LOG_3F_FILE.write(hex_data + "\n")
+            HEX_LOG_3F_FILE.flush()
     elif hex_data.startswith("8006"):
         # ACK packets - no logging for performance
         t_start = time_module.time()
@@ -1151,8 +1154,10 @@ def main():
     logs_dir = "logs"
     os.makedirs(logs_dir, exist_ok=True)
     
-    # Only create identity map JSON file (no hex logs)
+    # Create identity map JSON file and 3f00/3f01 hex log
     IDENTITY_JSON_FILE = os.path.join(logs_dir, f"{pid}_identity_map.json")
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    hex_log_3f_filename = os.path.join(logs_dir, f"{pid}_hex_log_3f00_3f01_{timestamp}.txt")
 
     try:
         # Start fresh identity map each run
@@ -1162,9 +1167,9 @@ def main():
         except Exception:
             pass
 
-        # Disable all file logging for performance
+        # Enable 3f00/3f01 logging for identity debugging
         LOG_FILE = None
-        HEX_LOG_3F_FILE = None
+        HEX_LOG_3F_FILE = open(hex_log_3f_filename, "w", encoding="utf-8")
         HEX_LOG_8006_FILE = None
         
         print(f"[+] Starting sniffer on port {SNIFF_PORT}")
@@ -1206,6 +1211,10 @@ def main():
         import sys
         sys.stderr.write(f"\n[!] An error occurred: {e}\n")
     finally:
+        # Close log files
+        if HEX_LOG_3F_FILE:
+            HEX_LOG_3F_FILE.close()
+        
         # Stop HTTP worker thread
         HTTP_WORKER_RUNNING = False
         if HTTP_WORKER_THREAD:
