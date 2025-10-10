@@ -558,6 +558,10 @@ def parse_identity_packet(hex_data: str) -> str:
         entity_id = int.from_bytes(b[4:8], "little")
         cookie = int.from_bytes(b[8:12], "little")
 
+        # Skip entity_id 20002 (chat messages, not players)
+        if entity_id == 20002:
+            return f"[=] IDENTITY PACKET SKIPPED (entity_id=20002 is chat message)\n    - Cookie: {cookie:08x}\n    - Full HEX: {hex_data}"
+
         # --- New, More Robust Parsing Logic ---
 
         def find_next_string(start_offset, min_len=1, max_len=64):
