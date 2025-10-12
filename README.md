@@ -37,26 +37,23 @@ python app.py
 
 2. **Open your browser** and navigate to `http://127.0.0.1:5001`
 
-3. **Add a server**:
-   - Enter a server name (e.g., "Condor Server 1")
-   - Select a landscape from the dropdown (e.g., AA3, Slovenia3, Colorado_C2)
-   - Enter the UDP port (e.g., 56288 or 56298)
-   - Click "Add Server"
+3. **Activate and start the server**:
+   - Servers are automatically loaded from the dashboard helpers config file.
+   - Select the desired server from the pre-configured list.
+   - Click "Activate" to enable it, then click the green "Start" button.
 
-4. **Start the server** by clicking the green "Start" button
-
-5. The sniffer will begin capturing packets and you'll see:
+4. The sniffer will begin capturing packets and you'll see:
    - Real-time status updates (Listening → Transmitting)
    - Process ID (PID) in the dashboard
    - Log files created in the `logs/` directory
 
-6. **Change landscape**: Stop the server, select a different landscape from the dropdown, then start again
+5. **Change landscape**: Stop the server, select a different landscape from the dropdown, then start again
 
-7. **Monitor multiple servers**: Add and manage multiple UDP sniffers on different ports simultaneously
+6. **Monitor multiple servers**: Activate and manage multiple pre-configured UDP sniffers simultaneously
 
 ### Manual Command Line Usage (Advanced)
 
-Alternatively, you can run the sniffer directly from the command line:
+Alternatively, you can run the sniffer directly from the command line (note: server details should still reference the config file for consistency):
 
 ```bash
 python sniffAndDecodeUDP_toExpress_viaFlask.py --port 56288 --server-name "My Server" --landscape AA3
