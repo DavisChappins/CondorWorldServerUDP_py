@@ -37,8 +37,11 @@ A Python tool to sniff, decode, and log UDP traffic from Condor (port 56298 by d
 - **Windows** with **Npcap** installed (Scapy uses Npcap/WinPcap for sniffing)
 - **Administrator privileges** (maybe) to capture packets
 - **Python packages** (install via `requirements.txt`):
-  - `scapy`
-
+  - `scapy>=2.5.0`
+  - `numpy>=1.24`
+  - `Flask>=3.0`
+  - `requests>=2.31`
+  - `psutil>=5.9.0`
 
 Install Python packages:
 
