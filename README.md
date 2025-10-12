@@ -2,34 +2,6 @@
 
 A Python tool to sniff, decode, and log UDP traffic from Condor (port 56298 by default). It parses multiple in-game packet types, reconstructs basic Flight Plan (.fpl) files from captured packets, and persists pilot identity mappings.
 
-## Features
-
-- **Sniff live UDP traffic** on a configurable port (default `56298`).
-- **Decode key packet families**:
-  - `0x3d00` Telemetry: position (X/Y), altitude, speed, heading, vertical speed, accel vectors.
-  - `0x3f00 / 0x3f01` Identity/config: pilot info (CN, name, registration, country, aircraft), cookie mapping.
-  - `0x1f00` FPL task core: landscape, turnpoints with geometry.
-  - `0x0700` and `0x0f00` Disabled airspaces list (chunked).
-  - `0x2f00` Settings bundle: description, plane class (heuristic), weather zone, common options.
-  - `0x8006` Short acknowledgements.
-- **Reconstruct .fpl files** from captured task/settings/disabled-airspaces.
-- **Multiple logs** written per run (human-readable and hex-only).
-- **Identity persistence** into `identity_map.json` (regenerated each run).
-- **XY→Lat/Lon conversion** using `navicon_bridge` with landscape-specific `.trn` files from `C:\Condor3\Landscapes\`.
-- **Web dashboard** for managing multiple UDP sniffer instances with landscape selection.
-
-## Repository Layout
-
-- `app.py` — Flask web dashboard for managing multiple UDP sniffer instances.
-- `sniffAndDecodeUDP_toExpress_viaFlask.py` — main sniffer/decoder entrypoint.
-- `navicon_bridge.py` — calls 32-bit NaviCon via helper EXE & landscape `.trn` files.
-- `replay_hex_log.py` — offline parser for hex-only logs (uses legacy parser in `scapy_udp_56298_14.py`).
-- `scapy_udp_56298_*.py` — prior analysis scripts and parsers.
-- `Condor3XY2LatLon.exe` — helper executable used by `navicon_bridge.py`.
-- `extra/` — utilities and experiments (including a separate README).
-- `requirements.txt` — Python dependencies for core tools.
-- `DASHBOARD_README.md` — detailed documentation for the Flask dashboard.
-- `QUICKSTART.md` — quick start guide for new users.
 
 ## Requirements
 
@@ -208,6 +180,32 @@ Notes:
   - Ensure Flask is installed: `pip install flask`
   - Check if port 5001 is already in use.
 
-## License
 
-Not specified. If you plan to publish or share, add a `LICENSE` file.
+## Features
+
+- **Sniff live UDP traffic** on a configurable port (default `56298`).
+- **Decode key packet families**:
+  - `0x3d00` Telemetry: position (X/Y), altitude, speed, heading, vertical speed, accel vectors.
+  - `0x3f00 / 0x3f01` Identity/config: pilot info (CN, name, registration, country, aircraft), cookie mapping.
+  - `0x1f00` FPL task core: landscape, turnpoints with geometry.
+  - `0x0700` and `0x0f00` Disabled airspaces list (chunked).
+  - `0x2f00` Settings bundle: description, plane class (heuristic), weather zone, common options.
+  - `0x8006` Short acknowledgements.
+- **Reconstruct .fpl files** from captured task/settings/disabled-airspaces.
+- **Multiple logs** written per run (human-readable and hex-only).
+- **Identity persistence** into `identity_map.json` (regenerated each run).
+- **XY→Lat/Lon conversion** using `navicon_bridge` with landscape-specific `.trn` files from `C:\Condor3\Landscapes\`.
+- **Web dashboard** for managing multiple UDP sniffer instances with landscape selection.
+
+## Repository Layout
+
+- `app.py` — Flask web dashboard for managing multiple UDP sniffer instances.
+- `sniffAndDecodeUDP_toExpress_viaFlask.py` — main sniffer/decoder entrypoint.
+- `navicon_bridge.py` — calls 32-bit NaviCon via helper EXE & landscape `.trn` files.
+- `replay_hex_log.py` — offline parser for hex-only logs (uses legacy parser in `scapy_udp_56298_14.py`).
+- `scapy_udp_56298_*.py` — prior analysis scripts and parsers.
+- `Condor3XY2LatLon.exe` — helper executable used by `navicon_bridge.py`.
+- `extra/` — utilities and experiments (including a separate README).
+- `requirements.txt` — Python dependencies for core tools.
+- `DASHBOARD_README.md` — detailed documentation for the Flask dashboard.
+- `QUICKSTART.md` — quick start guide for new users.
