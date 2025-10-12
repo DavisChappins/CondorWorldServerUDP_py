@@ -35,11 +35,54 @@ def load_task_files(flightplans_dir):
     return tasks
 
 
+def validate_task(task):
+    """Validate that a task has required fields for upload"""
+    # Check if task has at least one server
+    servers = task.get('servers', [])
+    if not servers or len(servers) == 0:
+        return False, "No servers specified"
+    
+    # Check if task has required fields
+    if not task.get('TaskName'):
+        return False, "Missing TaskName"
+    
+    return True, None
+
+
 def upload_tasks(tasks, api_base_url="https://server.condormap.com/api"):
     """Upload tasks to the server - single or bulk depending on count"""
     if not tasks:
         print("\nNo tasks to upload")
         return
+    
+    # Filter out invalid tasks
+    valid_tasks = []
+    invalid_tasks = []
+    
+    print("\n" + "=" * 60)
+    print(f"Validating {len(tasks)} task(s)...")
+    print("=" * 60)
+    
+    for task in tasks:
+        is_valid, error = validate_task(task)
+        if is_valid:
+            valid_tasks.append(task)
+        else:
+            invalid_tasks.append({
+                'task': task,
+                'error': error
+            })
+            task_name = task.get('TaskName', 'Unknown')
+            print(f"  [SKIP] {task_name}: {error}")
+    
+    if invalid_tasks:
+        print(f"\nSkipped {len(invalid_tasks)} invalid task(s)")
+    
+    if not valid_tasks:
+        print("\nNo valid tasks to upload")
+        return
+    
+    print(f"\nProceeding with {len(valid_tasks)} valid task(s)")
     
     # Common headers for all requests
     headers = {
@@ -48,8 +91,11 @@ def upload_tasks(tasks, api_base_url="https://server.condormap.com/api"):
     }
     
     print("\n" + "=" * 60)
-    print(f"Uploading {len(tasks)} task(s) to {api_base_url}")
+    print(f"Uploading {len(valid_tasks)} task(s) to {api_base_url}")
     print("=" * 60)
+    
+    # Use valid_tasks instead of tasks for the rest of the function
+    tasks = valid_tasks
     
     if len(tasks) == 1:
         # Single task upload
@@ -59,6 +105,9 @@ def upload_tasks(tasks, api_base_url="https://server.condormap.com/api"):
         print(f"\nUploading single task: {task.get('TaskName', 'Unknown')}")
         print(f"  CondorClubTaskID: {task.get('CondorClubTaskID', 'N/A')}")
         print(f"  Servers: {', '.join(task.get('servers', []))}")
+        server_group = task.get('ServerGroup')
+        if server_group:
+            print(f"  ServerGroup: {server_group}")
         print(f"  Endpoint: POST {url}")
         
         try:
@@ -84,7 +133,8 @@ def upload_tasks(tasks, api_base_url="https://server.condormap.com/api"):
         
         print(f"\nUploading {len(tasks)} tasks in bulk")
         for i, task in enumerate(tasks, 1):
-            print(f"  {i}. {task.get('TaskName', 'Unknown')} (ID: {task.get('CondorClubTaskID', 'N/A')})")
+            server_group = task.get('ServerGroup', 'N/A')
+            print(f"  {i}. {task.get('TaskName', 'Unknown')} (ID: {task.get('CondorClubTaskID', 'N/A')}, Group: {server_group})")
         print(f"  Endpoint: POST {url}")
         
         try:

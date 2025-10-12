@@ -52,20 +52,25 @@ def convert_xy_to_latlon(landscape_code, x, y):
         print(f"  ERROR: Coordinate conversion failed: {e}")
         return None, None
 
-def fetch_server_names():
-    """Fetch list of configured server names from the dashboard API or local config.json as fallback"""
+def fetch_servers_with_paths():
+    """Fetch list of configured servers with their paths from the dashboard API or local config.json as fallback"""
     # First try the running dashboard API
     host = os.getenv('DASHBOARD_HOST', '127.0.0.1')
     port = os.getenv('DASHBOARD_PORT', '5001')
     url = f"http://{host}:{port}/api/servers"
     try:
-        print(f"  Attempting to fetch server names from dashboard API...")
+        print(f"  Attempting to fetch servers from dashboard API...")
         resp = requests.get(url, timeout=2.0)
         if resp.ok:
             servers = resp.json()
-            names = [s.get('server_name') for s in servers if s.get('server_name')]
-            print(f"  Successfully fetched {len(names)} server names from API")
-            return names
+            # Return list of dicts with server_name, path, and group
+            server_list = [{'name': s.get('server_name'), 'path': s.get('path'), 'group': s.get('group')} 
+                          for s in servers if s.get('server_name') and s.get('path')]
+            print(f"  Successfully fetched {len(server_list)} server(s) from API")
+            for srv in server_list:
+                group_info = f" (group: {srv['group']})" if srv.get('group') else ""
+                print(f"    - {srv['name']}: {srv['path']}{group_info}")
+            return server_list
         else:
             print(f"  Dashboard API returned status {resp.status_code}, trying config.json...")
     except Exception as e:
@@ -75,24 +80,30 @@ def fetch_server_names():
     try:
         config_path = Path(__file__).parent / 'config.json'
         if config_path.exists():
-            print(f"  Reading server names from config.json...")
+            print(f"  Reading servers from config.json...")
             with open(config_path, 'r', encoding='utf-8') as f:
                 cfg = json.load(f)
                 servers = cfg.get('servers', [])
-                names = [s.get('server_name') for s in servers if s.get('server_name')]
-                print(f"  Found {len(names)} server names in config.json")
-                return names
+                server_list = [{'name': s.get('server_name'), 'path': s.get('path'), 'group': s.get('group')} 
+                              for s in servers if s.get('server_name') and s.get('path')]
+                print(f"  Found {len(server_list)} server(s) in config.json")
+                for srv in server_list:
+                    group_info = f" (group: {srv['group']})" if srv.get('group') else ""
+                    print(f"    - {srv['name']}: {srv['path']}{group_info}")
+                return server_list
         else:
             print(f"  config.json not found at {config_path}")
     except Exception as e:
         print(f"  Error reading config.json: {e}")
     
-    print(f"  No server names found, continuing without them")
+    print(f"  No servers found, continuing without them")
     return []
 
-def parse_fpl_file(fpl_path, server_names=None):
+def parse_fpl_file(fpl_path, servers_list=None, task_server_path=None):
     """Parse a Condor .fpl file and extract relevant task information"""
     print(f"Parsing: {fpl_path.name}")
+    if task_server_path:
+        print(f"  Task server path: {task_server_path}")
     
     try:
         config = configparser.ConfigParser()
@@ -153,8 +164,11 @@ def parse_fpl_file(fpl_path, server_names=None):
         
         if actual_count < 1:
             print(f"  WARNING: Task has less than 1 turnpoint")
-            # Append servers at the end for readability
-            task_data['servers'] = list(server_names or [])
+            # Match servers by path
+            matched_servers, matched_group = match_servers_by_path(servers_list, task_server_path)
+            task_data['servers'] = matched_servers
+            if matched_group:
+                task_data['ServerGroup'] = matched_group
             return task_data
         
         # Check if we can convert coordinates
@@ -208,15 +222,57 @@ def parse_fpl_file(fpl_path, server_names=None):
             else:
                 print(f"  TP{human_index}: {display_name} (XY: {tp_pos_x}, {tp_pos_y}) - Radius: {tp_radius}m")
         
-        # Append servers at the end for readability (after Turnpoints)
-        task_data['servers'] = list(server_names or [])
+        # Match servers by path and append at the end for readability (after Turnpoints)
+        matched_servers, matched_group = match_servers_by_path(servers_list, task_server_path)
+        task_data['servers'] = matched_servers
+        if matched_group:
+            task_data['ServerGroup'] = matched_group
+        print(f"  Matched {len(matched_servers)} server(s) by path: {matched_servers}")
+        if matched_group:
+            print(f"  Server group: {matched_group}")
         return task_data
         
     except Exception as e:
         print(f"  ERROR: Failed to parse {fpl_path.name}: {e}")
         return None
 
-def update_tasks_json_with_taskids(script_dir, flightplans_dir):
+def match_servers_by_path(servers_list, task_server_path):
+    """Match servers by comparing their path with the task's serverPath
+    Returns: (matched_server_names, matched_server_group)
+    """
+    if not servers_list or not task_server_path:
+        print(f"  No path matching: servers_list={bool(servers_list)}, task_server_path={task_server_path}")
+        return [], None
+    
+    # Normalize paths for comparison (remove trailing backslash, convert to lowercase)
+    normalized_task_path = task_server_path.rstrip('\\').lower()
+    print(f"  Normalized task path for matching: {normalized_task_path}")
+    
+    matched_names = []
+    matched_group = None
+    for server in servers_list:
+        server_path_raw = server.get('path', '')
+        # Handle both directory paths and full exe paths
+        # If it's a full path to exe, extract the directory
+        if server_path_raw.lower().endswith('.exe'):
+            from pathlib import Path
+            server_path = str(Path(server_path_raw).parent).rstrip('\\').lower()
+        else:
+            server_path = server_path_raw.rstrip('\\').lower()
+        
+        if server_path == normalized_task_path:
+            matched_names.append(server['name'])
+            # Use the group from the first matched server
+            if matched_group is None:
+                matched_group = server.get('group')
+            group_info = f" (group: {matched_group})" if matched_group else ""
+            print(f"  [MATCH] Server '{server['name']}' (path: {server['path']}){group_info}")
+        else:
+            print(f"  [SKIP] Server '{server['name']}' (path: {server['path']} != {task_server_path})")
+    
+    return matched_names, matched_group
+
+def update_tasks_json_with_taskids(script_dir, flightplans_dir, servers_list):
     """Update tasks.json with TaskID from converted flight plan JSONs AND add DSHelperStartTime to flight plan JSONs"""
     tasks_json_path = script_dir / "tasks.json"
     
@@ -283,6 +339,9 @@ def update_tasks_json_with_taskids(script_dir, flightplans_dir):
                 
                 # Add DSHelperStartTime to the flight plan JSON (insert after TaskName)
                 start_time = task.get('startTime')
+                task_server_path = task.get('serverPath')
+                needs_update = False
+                
                 if start_time and 'DSHelperStartTime' not in fpl_data:
                     # Rebuild fpl_data with DSHelperStartTime after TaskName
                     new_fpl_data = {}
@@ -290,12 +349,26 @@ def update_tasks_json_with_taskids(script_dir, flightplans_dir):
                         new_fpl_data[key] = value
                         if key == 'TaskName':
                             new_fpl_data['DSHelperStartTime'] = start_time
-                    
-                    # Save the updated flight plan JSON
-                    with open(json_path, 'w', encoding='utf-8') as f:
-                        json.dump(new_fpl_data, f, indent=2, ensure_ascii=False)
-                    
+                    fpl_data = new_fpl_data
+                    needs_update = True
                     print(f"    Added DSHelperStartTime to {json_filename}")
+                
+                # Update servers list and ServerGroup based on serverPath matching
+                if task_server_path:
+                    matched_servers, matched_group = match_servers_by_path(servers_list, task_server_path)
+                    if matched_servers != fpl_data.get('servers', []):
+                        fpl_data['servers'] = matched_servers
+                        needs_update = True
+                        print(f"    Updated servers list to {matched_servers} based on path {task_server_path}")
+                    if matched_group and matched_group != fpl_data.get('ServerGroup'):
+                        fpl_data['ServerGroup'] = matched_group
+                        needs_update = True
+                        print(f"    Updated ServerGroup to '{matched_group}'")
+                
+                # Save if anything changed
+                if needs_update:
+                    with open(json_path, 'w', encoding='utf-8') as f:
+                        json.dump(fpl_data, f, indent=2, ensure_ascii=False)
                     updated_fpl_count += 1
                     
             except Exception as e:
@@ -332,12 +405,15 @@ def convert_all_fpl_files():
         print(f"ERROR: Flightplans directory not found: {flightplans_dir}")
         return
     
-    # Fetch server names once to avoid multiple API calls
-    server_names = fetch_server_names()
-    if server_names:
-        print(f"Found {len(server_names)} server(s) from dashboard: {', '.join(server_names)}")
+    # Fetch servers with paths once to avoid multiple API calls
+    servers_list = fetch_servers_with_paths()
+    if servers_list:
+        print(f"\nFound {len(servers_list)} server(s) from dashboard/config:")
+        for srv in servers_list:
+            group_info = f" (group: {srv['group']})" if srv.get('group') else ""
+            print(f"  - {srv['name']}: {srv['path']}{group_info}")
     else:
-        print("No servers found from dashboard/config (this is OK)")
+        print("\nNo servers found from dashboard/config (this is OK)")
     
     # Find all .fpl files
     fpl_files = list(flightplans_dir.glob("*.fpl"))
@@ -348,13 +424,34 @@ def convert_all_fpl_files():
     
     print(f"Found {len(fpl_files)} flight plan file(s)\n")
     
+    # Load tasks.json to get serverPath for each flight plan
+    tasks_json_path = script_dir / "tasks.json"
+    tasks_map = {}
+    if tasks_json_path.exists():
+        try:
+            with open(tasks_json_path, 'r', encoding='utf-8') as f:
+                tasks = json.load(f)
+                # Map flight plan filename to serverPath
+                for task in tasks:
+                    fpl_path_str = task.get('localFlightplan')
+                    if fpl_path_str:
+                        fpl_name = Path(fpl_path_str).name
+                        tasks_map[fpl_name] = task.get('serverPath')
+                print(f"\nLoaded serverPath mappings for {len(tasks_map)} task(s) from tasks.json")
+        except Exception as e:
+            print(f"\nWARNING: Could not load tasks.json: {e}")
+    else:
+        print(f"\nWARNING: tasks.json not found - will not match servers by path")
+    
     converted_count = 0
     
     for idx, fpl_path in enumerate(fpl_files, 1):
         try:
-            print(f"[{idx}/{len(fpl_files)}] Processing {fpl_path.name}...")
+            print(f"\n[{idx}/{len(fpl_files)}] Processing {fpl_path.name}...")
+            # Get the serverPath for this flight plan from tasks.json
+            task_server_path = tasks_map.get(fpl_path.name)
             # Parse the FPL file
-            task_data = parse_fpl_file(fpl_path, server_names=server_names)
+            task_data = parse_fpl_file(fpl_path, servers_list=servers_list, task_server_path=task_server_path)
             
             if task_data is None:
                 print(f"  Skipped (parse returned None)\n")
@@ -382,12 +479,14 @@ def convert_all_fpl_files():
     print("=" * 60)
     
     # Update tasks.json with TaskIDs if it exists
-    print(f"\nStarting tasks.json update...")
+    print(f"\n" + "=" * 60)
+    print(f"Starting tasks.json update...")
+    print("=" * 60)
     try:
-        update_tasks_json_with_taskids(script_dir, flightplans_dir)
-        print(f"tasks.json update completed")
+        update_tasks_json_with_taskids(script_dir, flightplans_dir, servers_list)
+        print(f"\ntasks.json update completed")
     except Exception as e:
-        print(f"ERROR during tasks.json update: {e}")
+        print(f"\nERROR during tasks.json update: {e}")
         import traceback
         traceback.print_exc()
 

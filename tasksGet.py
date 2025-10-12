@@ -44,6 +44,27 @@ def extract_local_flightplan(options_text):
     
     return None
 
+def extract_server_path(options_text):
+    """Extract ServerPath directory from the nested XML in Options"""
+    if not options_text:
+        return None
+    
+    nested_root = parse_nested_xml(options_text)
+    if nested_root is None:
+        return None
+    
+    # Find ServerPath element
+    server_path = nested_root.find('ServerPath')
+    if server_path is not None and server_path.text:
+        full_path = server_path.text.strip()
+        # Extract just the directory (e.g., C:\Condor3_2\ from C:\Condor3_2\CondorDedicated.exe)
+        path_obj = Path(full_path)
+        if path_obj.parent:
+            # Return directory with trailing backslash
+            return str(path_obj.parent) + "\\"
+    
+    return None
+
 def parse_scheduler_file(scheduler_path):
     """Parse the scheduler.dat XML file and extract relevant information"""
     print(f"Reading scheduler file...")
@@ -76,11 +97,13 @@ def parse_scheduler_file(scheduler_path):
             # Extract StartTime from Trigger
             trigger = item.find('.//Trigger/SchedulerTriggerItem/StartTime')
             
-            # Extract LocalFlightplan from nested XML in Actions/Options
+            # Extract LocalFlightplan and ServerPath from nested XML in Actions/Options
             local_flightplan = None
+            server_path = None
             actions = item.find('.//Actions/SchedulerActionItem/Options')
             if actions is not None and actions.text:
                 local_flightplan = extract_local_flightplan(actions.text)
+                server_path = extract_server_path(actions.text)
             
             # Only add if we have the required fields
             if task_id is not None and description is not None:
@@ -88,13 +111,16 @@ def parse_scheduler_file(scheduler_path):
                     'id': task_id.text.strip() if task_id.text else None,
                     'description': description.text.strip() if description.text else None,
                     'startTime': trigger.text.strip() if trigger is not None and trigger.text else None,
-                    'localFlightplan': local_flightplan
+                    'localFlightplan': local_flightplan,
+                    'serverPath': server_path
                 }
                 
                 tasks.append(task_data)
                 print(f"Extracted task {task_data['id']}: {task_data['description']}")
                 if local_flightplan:
                     print(f"  Flight plan: {local_flightplan}")
+                if server_path:
+                    print(f"  Server path: {server_path}")
                 if task_data['startTime']:
                     print(f"  Start time: {task_data['startTime']} (UTC)")
         

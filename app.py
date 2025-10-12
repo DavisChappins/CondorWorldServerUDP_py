@@ -43,7 +43,7 @@ TASK_SYNC_COOLDOWN = 1800  # 30 minutes in seconds
 # ============================================================================
 
 def get_available_landscapes():
-    """Scan C:\Condor3\Landscapes for available landscape folders with .trn files"""
+    r"""Scan C:\Condor3\Landscapes for available landscape folders with .trn files"""
     landscapes = []
     
     if not os.path.exists(LANDSCAPES_PATH):
@@ -63,6 +63,102 @@ def get_available_landscapes():
     return sorted(landscapes)
 
 
+def get_landscapes_with_paths():
+    r"""Get landscapes with their full file paths"""
+    landscapes = []
+    
+    if not os.path.exists(LANDSCAPES_PATH):
+        return landscapes
+    
+    try:
+        for item in os.listdir(LANDSCAPES_PATH):
+            item_path = os.path.join(LANDSCAPES_PATH, item)
+            if os.path.isdir(item_path):
+                # Check if a .trn file with the same name exists
+                trn_file = os.path.join(item_path, f"{item}.trn")
+                if os.path.isfile(trn_file):
+                    landscapes.append({
+                        'name': item,
+                        'path': item_path,
+                        'trn_file': trn_file
+                    })
+    except Exception as e:
+        print(f"[!] Error scanning landscapes: {e}")
+    
+    return sorted(landscapes, key=lambda x: x['name'])
+
+
+def get_windows_username():
+    """Get the current Windows username"""
+    return os.environ.get('USERNAME', os.environ.get('USER', 'Administrator'))
+
+
+def find_user_settings_file():
+    """Find the user_settings.xml file in AppData"""
+    username = get_windows_username()
+    from pathlib import Path
+    settings_path = Path(f"C:\\Users\\{username}\\AppData\\Roaming\\Hitziger Solutions\\DSHelper\\user_settings.xml")
+    return settings_path
+
+
+def parse_dshelper_servers():
+    """Parse DSHelper user_settings.xml and extract server configurations"""
+    import xml.etree.ElementTree as ET
+    import os
+    
+    settings_path = find_user_settings_file()
+    
+    if not settings_path.exists():
+        print(f"[!] DSHelper settings file not found at: {settings_path}")
+        return []
+    
+    try:
+        tree = ET.parse(settings_path)
+        root = tree.getroot()
+        
+        servers = []
+        
+        # Find all ServerSettings elements
+        for server_elem in root.findall('.//ServerSettings'):
+            try:
+                server_id = server_elem.find('Id')
+                filename = server_elem.find('Filename')
+                displayname = server_elem.find('Displayname')
+                
+                # Get hostfile data
+                hostfile = server_elem.find('Hostfile')
+                if hostfile is not None:
+                    server_name = hostfile.find('ServerName')
+                    port = hostfile.find('Port')
+                    
+                    filename_value = filename.text if filename is not None else None
+                    # Extract just the directory path (e.g., C:\Condor3\)
+                    path_value = os.path.dirname(filename_value) + '\\' if filename_value else None
+                    
+                    server_data = {
+                        'id': int(server_id.text) if server_id is not None and server_id.text else None,
+                        'filename': filename_value,
+                        'path': path_value,
+                        'displayname': displayname.text if displayname is not None else None,
+                        'server_name': server_name.text if server_name is not None else None,
+                        'port': int(port.text) if port is not None and port.text else None
+                    }
+                    
+                    servers.append(server_data)
+            except Exception as e:
+                print(f"[!] Error parsing server entry: {e}")
+                continue
+        
+        # Sort by ID
+        servers.sort(key=lambda x: x['id'] if x['id'] is not None else 999)
+        
+        return servers
+        
+    except Exception as e:
+        print(f"[!] Error reading DSHelper settings: {e}")
+        return []
+
+
 # ============================================================================
 # Configuration Manager
 # ============================================================================
@@ -72,7 +168,7 @@ class ConfigManager:
     
     def __init__(self, config_path=CONFIG_FILE):
         self.config_path = config_path
-        self.data = {'servers': []}
+        self.data = {'servers': [], 'groups': []}
         self.load()
     
     def load(self):
@@ -83,11 +179,13 @@ class ConfigManager:
                     self.data = json.load(f)
                     if 'servers' not in self.data:
                         self.data['servers'] = []
+                    if 'groups' not in self.data:
+                        self.data['groups'] = []
             except Exception as e:
                 print(f"[!] Error loading config: {e}")
-                self.data = {'servers': []}
+                self.data = {'servers': [], 'groups': []}
         else:
-            self.data = {'servers': []}
+            self.data = {'servers': [], 'groups': []}
     
     def save(self):
         """Save configuration to JSON file"""
@@ -106,13 +204,15 @@ class ConfigManager:
         except Exception as e:
             print(f"[!] Error saving config: {e}")
     
-    def add_server(self, server_name, port, landscape='AA3'):
+    def add_server(self, server_name, port, landscape='AA3', path=None):
         """Add a new server configuration"""
         server = {
             'id': str(uuid.uuid4()),
             'server_name': server_name,
             'port': port,
             'landscape': landscape,
+            'group': None,
+            'path': path,
             'pid': None,
             'status': 'off',
             'created_at': datetime.now(timezone.utc).isoformat(),
@@ -147,6 +247,38 @@ class ConfigManager:
     def get_all_servers(self):
         """Get all servers"""
         return self.data['servers']
+
+    # ---------------------------
+    # Soaring Groups Management
+    # ---------------------------
+    def add_group(self, name):
+        """Add a new soaring group (unique by name, case-insensitive)"""
+        if not name or not name.strip():
+            raise ValueError('Group name is required')
+        norm = name.strip().lower()
+        for g in self.data.get('groups', []):
+            if g.get('name', '').strip().lower() == norm:
+                raise ValueError('Group name already exists')
+        group = {'id': str(uuid.uuid4()), 'name': name.strip()}
+        self.data['groups'].append(group)
+        self.save()
+        return group
+
+    def get_all_groups(self):
+        """Return all soaring groups"""
+        return self.data.get('groups', [])
+
+    def delete_group(self, group_id):
+        """Delete a group by id and clear it from servers using it"""
+        groups_before = len(self.data.get('groups', []))
+        self.data['groups'] = [g for g in self.data.get('groups', []) if g.get('id') != group_id]
+        # Clear group from servers that referenced this group
+        for s in self.data.get('servers', []):
+            if s.get('group_id') == group_id:
+                s['group_id'] = None
+                s['group'] = None
+        self.save()
+        return groups_before != len(self.data['groups'])
 
 
 # ============================================================================
@@ -256,6 +388,10 @@ def start_sniffer(server):
         port = server['port']
         if not (1024 <= port <= 65535):
             return {'success': False, 'error': 'Invalid port number (must be 1024-65535)'}
+        
+        # Require Soaring Group before starting
+        if not server.get('group'):
+            return {'success': False, 'error': 'Soaring Group must be selected before starting'}
         
         # Check if already running
         if server.get('pid') and is_process_running(server['pid']):
@@ -516,12 +652,22 @@ def api_add_server():
     """Add a new server"""
     data = request.get_json()
     
+    print(f"\n[DEBUG-API] ========================================")
+    print(f"[DEBUG-API] Received POST /api/servers")
+    print(f"[DEBUG-API] Raw request data: {repr(data)}")
+    
     if not data:
         return jsonify({'error': 'No data provided'}), 400
     
     server_name = data.get('server_name', '').strip()
     port = data.get('port')
     landscape = data.get('landscape', 'AA3').strip()
+    path = data.get('path', '').strip() or None
+    
+    print(f"[DEBUG-API] Extracted path from request: {repr(path)}")
+    print(f"[DEBUG-API] Path type: {type(path)}")
+    if path:
+        print(f"[DEBUG-API] Path character codes: {[ord(c) for c in path[:50]]}")
     
     if not server_name:
         return jsonify({'error': 'Server name is required'}), 400
@@ -541,7 +687,10 @@ def api_add_server():
         if server['port'] == port:
             return jsonify({'error': f'Port {port} is already in use'}), 400
     
-    server = config.add_server(server_name, port, landscape)
+    print(f"[DEBUG-API] About to call config.add_server with path: {repr(path)}")
+    server = config.add_server(server_name, port, landscape, path)
+    print(f"[DEBUG-API] Server created, path in result: {repr(server.get('path'))}")
+    print(f"[DEBUG-API] ========================================\n")
     return jsonify(server), 201
 
 
@@ -579,11 +728,19 @@ def api_start_server(server_id):
 
 @app.route('/api/servers/<server_id>/stop', methods=['POST'])
 def api_stop_server(server_id):
-    """Stop a server's sniffer process"""
+    """Stop a server's sniffer process or cancel countdown"""
     server = config.get_server(server_id)
     
     if not server:
         return jsonify({'error': 'Server not found'}), 404
+    
+    # Check if server is in countdown
+    with auto_start_lock:
+        if server_id in auto_start_countdowns:
+            # Cancel the countdown by removing it
+            auto_start_countdowns.pop(server_id, None)
+            config.update_server(server_id, {'status': 'off'})
+            return jsonify({'success': True, 'message': 'Countdown cancelled'})
     
     result = stop_sniffer(server)
     
@@ -641,6 +798,68 @@ def api_update_landscape(server_id):
     return jsonify({'success': True, 'landscape': landscape})
 
 
+@app.route('/api/dshelper/servers', methods=['GET'])
+def api_get_dshelper_servers():
+    """Get servers detected from DSHelper user_settings.xml"""
+    servers = parse_dshelper_servers()
+    return jsonify(servers)
+
+
+@app.route('/api/landscapes/details', methods=['GET'])
+def api_get_landscapes_details():
+    """Get landscapes with full path information"""
+    landscapes = get_landscapes_with_paths()
+    return jsonify(landscapes)
+
+
+@app.route('/api/groups', methods=['GET'])
+def api_get_groups():
+    """Get all soaring groups"""
+    return jsonify({'groups': config.get_all_groups()})
+
+
+@app.route('/api/groups', methods=['POST'])
+def api_add_group():
+    """Create a new soaring group"""
+    data = request.get_json()
+    name = (data or {}).get('name', '').strip()
+    if not name:
+        return jsonify({'error': 'Group name is required'}), 400
+    try:
+        group = config.add_group(name)
+        return jsonify(group), 201
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+
+@app.route('/api/servers/<server_id>/group', methods=['PUT'])
+def api_update_group(server_id):
+    """Assign or clear a soaring group for a server (only when stopped)"""
+    server = config.get_server(server_id)
+    if not server:
+        return jsonify({'error': 'Server not found'}), 404
+    
+    # Must be stopped to change group to keep UX simple
+    if server.get('pid') and is_process_running(server['pid']):
+        return jsonify({'error': 'Cannot change group while server is running. Stop the server first.'}), 400
+    
+    data = request.get_json() or {}
+    group_id = (data.get('group_id') or '').strip()
+    if not group_id:
+        # Clear
+        updated = config.update_server(server_id, {'group': None, 'group_id': None})
+        return jsonify({'success': True, 'server': updated})
+    
+    # Validate group exists
+    groups = config.get_all_groups()
+    match = next((g for g in groups if g.get('id') == group_id), None)
+    if not match:
+        return jsonify({'error': 'Group not found'}), 404
+    
+    updated = config.update_server(server_id, {'group_id': match['id'], 'group': match['name']})
+    return jsonify({'success': True, 'server': updated})
+
+
 # ============================================================================
 # Dashboard HTML Template
 # ============================================================================
@@ -656,7 +875,7 @@ DASHBOARD_HTML = """
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
     <style>
         body {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #e0e7ff 0%, #f3f4f6 100%);
             min-height: 100vh;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
         }
@@ -696,7 +915,16 @@ DASHBOARD_HTML = """
         }
         
         .card-header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%);
+            color: white;
+            border-radius: 15px 15px 0 0 !important;
+            padding: 1.5rem;
+            font-weight: 600;
+            font-size: 1.2rem;
+        }
+        
+        .card-header-purple {
+            background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
             color: white;
             border-radius: 15px 15px 0 0 !important;
             padding: 1.5rem;
@@ -801,6 +1029,19 @@ DASHBOARD_HTML = """
             box-shadow: 0 4px 12px rgba(108, 117, 125, 0.4);
         }
         
+        .btn-warning {
+            background: #ffc107;
+            border: none;
+            color: #000;
+        }
+        
+        .btn-warning:hover {
+            background: #e0a800;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(255, 193, 7, 0.4);
+            color: #000;
+        }
+        
         .add-server-section {
             background: #f8f9fa;
             padding: 2rem;
@@ -886,6 +1127,79 @@ DASHBOARD_HTML = """
                 opacity: 1;
             }
         }
+        
+        @keyframes spin {
+            from {
+                transform: rotate(0deg);
+            }
+            to {
+                transform: rotate(360deg);
+            }
+        }
+        
+        .spin {
+            animation: spin 1s linear infinite;
+        }
+        
+        .btn-refresh {
+            background: linear-gradient(135deg, #e9ecef 0%, #dee2e6 100%);
+            color: #495057;
+            border: none;
+            padding: 0.5rem 1.2rem;
+            border-radius: 8px;
+            font-weight: 500;
+            transition: all 0.3s;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        
+        .btn-refresh:hover {
+            background: linear-gradient(135deg, #dee2e6 0%, #ced4da 100%);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            color: #495057;
+        }
+        
+        .btn-refresh:active {
+            transform: translateY(0);
+            box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+        }
+        
+        .btn-add-active {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            color: white;
+            border: none;
+            padding: 0.4rem 1rem;
+            border-radius: 6px;
+            font-weight: 500;
+            font-size: 0.875rem;
+            transition: all 0.3s;
+            box-shadow: 0 2px 6px rgba(40, 167, 69, 0.3);
+        }
+        
+        .btn-add-active:hover:not(:disabled) {
+            background: linear-gradient(135deg, #218838 0%, #1ea87a 100%);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 10px rgba(40, 167, 69, 0.4);
+            color: white;
+        }
+        
+        .btn-add-active:disabled {
+            background: linear-gradient(135deg, #e9ecef 0%, #dee2e6 100%);
+            color: #6c757d;
+            box-shadow: none;
+        }
+        
+        .btn-success:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .group-required-warning {
+            color: #dc3545;
+            font-size: 0.75rem;
+            font-weight: 500;
+            margin-top: 0.25rem;
+        }
     </style>
 </head>
 <body>
@@ -916,8 +1230,10 @@ DASHBOARD_HTML = """
                         <thead>
                             <tr>
                                 <th>Server Name</th>
+                                <th>Group</th>
                                 <th>Landscape</th>
                                 <th>Port</th>
+                                <th>Path</th>
                                 <th>PID</th>
                                 <th style="width: 150px;">Status</th>
                                 <th>Actions</th>
@@ -925,7 +1241,7 @@ DASHBOARD_HTML = """
                         </thead>
                         <tbody id="servers-table-body">
                             <tr class="empty-state">
-                                <td colspan="6">
+                                <td colspan="8">
                                     <i class="bi bi-inbox"></i>
                                     <p>No servers configured yet. Add one below to get started!</p>
                                 </td>
@@ -936,29 +1252,115 @@ DASHBOARD_HTML = """
             </div>
         </div>
 
-        <div class="add-server-section">
-            <h5><i class="bi bi-plus-circle"></i> Add New Server</h5>
-            <form id="add-server-form" class="row g-3">
-                <div class="col-md-4">
-                    <label for="server-name" class="form-label">Server Name</label>
-                    <input type="text" class="form-control" id="server-name" placeholder="e.g., Condor Server 1" required>
+        <div class="card mt-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-search"></i> Detected Servers</span>
+                <button class="btn btn-refresh" onclick="refreshDetectedServers()" title="Refresh detected servers">
+                    <i class="bi bi-arrow-clockwise"></i> Refresh
+                </button>
+            </div>
+            <div class="card-body p-0">
+                <p class="text-muted small px-3 pt-3 mb-2">
+                    <i class="bi bi-info-circle"></i> Servers detected from DSHelper configuration
+                </p>
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead>
+                            <tr>
+                                <th style="width: 60px;">ID</th>
+                                <th>DSHelper Name</th>
+                                <th>Condor Server Name</th>
+                                <th>Port</th>
+                                <th>Path to Dedicated Server</th>
+                                <th style="width: 180px;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="detected-servers-table-body">
+                            <tr class="empty-state">
+                                <td colspan="6" class="text-center py-4">
+                                    <i class="bi bi-hourglass-split"></i>
+                                    <p>Loading detected servers...</p>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
-                <div class="col-md-3">
-                    <label for="server-landscape" class="form-label">Landscape</label>
-                    <select class="form-control" id="server-landscape" required>
-                        <option value="">Loading...</option>
-                    </select>
+            </div>
+        </div>
+
+        <div class="card mt-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-people"></i> Soaring Group</span>
+                <button class="btn btn-refresh" onclick="refreshGroups()" title="Refresh groups">
+                    <i class="bi bi-arrow-clockwise"></i> Refresh
+                </button>
+            </div>
+            <div class="card-body">
+                <p class="text-muted small mb-3">
+                    <i class="bi bi-info-circle"></i> A soaring group is a collection of servers running the same or similar task. If you have a contest on Condor Club but run multiple servers (different times or A/B/C servers), groups let you manage them under one name. If you only have one server you still nee
+                </p>
+                <div class="row g-3 align-items-end">
+                    <div class="col-md-6">
+                        <label for="group-name-input" class="form-label">Group Name</label>
+                        <input type="text" id="group-name-input" class="form-control" placeholder="e.g., Contest Day 1 Group A/B/C" />
+                    </div>
+                    <div class="col-md-3">
+                        <button class="btn btn-primary w-100" onclick="addGroup()">
+                            <i class="bi bi-plus-circle"></i> Add Group
+                        </button>
+                    </div>
                 </div>
-                <div class="col-md-2">
-                    <label for="server-port" class="form-label">Port</label>
-                    <input type="number" class="form-control" id="server-port" placeholder="56288" min="1024" max="65535" required>
+                <div class="table-responsive mt-3">
+                    <table class="table table-hover mb-0">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Members</th>
+                            </tr>
+                        </thead>
+                        <tbody id="groups-table-body">
+                            <tr class="empty-state">
+                                <td colspan="2" class="text-center py-4">
+                                    <i class="bi bi-hourglass-split"></i>
+                                    <p>Loading groups...</p>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
-                <div class="col-md-3 d-flex align-items-end">
-                    <button type="submit" class="btn btn-primary w-100">
-                        <i class="bi bi-plus-lg"></i> Add Server
-                    </button>
+            </div>
+        </div>
+
+        <div class="card mt-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-map"></i> Detected Landscapes</span>
+                <button class="btn btn-refresh" onclick="refreshDetectedLandscapes()" title="Refresh detected landscapes">
+                    <i class="bi bi-arrow-clockwise"></i> Refresh
+                </button>
+            </div>
+            <div class="card-body p-0">
+                <p class="text-muted small px-3 pt-3 mb-2">
+                    <i class="bi bi-info-circle"></i> Landscapes detected from C:\Condor3\Landscapes
+                </p>
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead>
+                            <tr>
+                                <th>Landscape Name</th>
+                                <th>File Location</th>
+                            </tr>
+                        </thead>
+                        <tbody id="detected-landscapes-table-body">
+                            <tr class="empty-state">
+                                <td colspan="2" class="text-center py-4">
+                                    <i class="bi bi-hourglass-split"></i>
+                                    <p>Loading detected landscapes...</p>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
-            </form>
+            </div>
         </div>
     </div>
 
@@ -969,6 +1371,192 @@ DASHBOARD_HTML = """
     <script>
         let servers = [];
         let landscapes = [];
+        let detectedServers = [];
+        let detectedLandscapes = [];
+        let groups = [];
+        
+        // Fetch detected landscapes with paths
+        async function fetchDetectedLandscapes() {
+            try {
+                const response = await fetch('/api/landscapes/details');
+                detectedLandscapes = await response.json();
+                renderDetectedLandscapes();
+            } catch (error) {
+                console.error('Error fetching detected landscapes:', error);
+                const tbody = document.getElementById('detected-landscapes-table-body');
+                tbody.innerHTML = `
+                    <tr class="empty-state">
+                        <td colspan="2" class="text-center py-4 text-danger">
+                            <i class="bi bi-exclamation-triangle"></i>
+                            <p>Error loading detected landscapes</p>
+                        </td>
+                    </tr>
+                `;
+            }
+        }
+        
+        // Render detected landscapes table
+        function renderDetectedLandscapes() {
+            const tbody = document.getElementById('detected-landscapes-table-body');
+            
+            if (detectedLandscapes.length === 0) {
+                tbody.innerHTML = `
+                    <tr class="empty-state">
+                        <td colspan="2" class="text-center py-4">
+                            <i class="bi bi-inbox"></i>
+                            <p>No landscapes detected in C:\\Condor3\\Landscapes</p>
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+            
+            tbody.innerHTML = detectedLandscapes.map(landscape => {
+                return `
+                    <tr>
+                        <td><strong>${escapeHtml(landscape.name)}</strong></td>
+                        <td><code class="small">${escapeHtml(landscape.path)}</code></td>
+                    </tr>
+                `;
+            }).join('');
+        }
+        
+        // Refresh detected landscapes
+        async function refreshDetectedLandscapes() {
+            const tbody = document.getElementById('detected-landscapes-table-body');
+            tbody.innerHTML = `
+                <tr class="empty-state">
+                    <td colspan="2" class="text-center py-4">
+                        <i class="bi bi-arrow-clockwise spin"></i>
+                        <p>Refreshing...</p>
+                    </td>
+                </tr>
+            `;
+            await fetchDetectedLandscapes();
+            showAlert('Detected landscapes refreshed!', 'info');
+        }
+        
+        // Fetch detected servers from DSHelper
+        async function fetchDetectedServers() {
+            try {
+                const response = await fetch('/api/dshelper/servers');
+                detectedServers = await response.json();
+                renderDetectedServers();
+            } catch (error) {
+                console.error('Error fetching detected servers:', error);
+                const tbody = document.getElementById('detected-servers-table-body');
+                tbody.innerHTML = `
+                    <tr class="empty-state">
+                        <td colspan="5" class="text-center py-4 text-danger">
+                            <i class="bi bi-exclamation-triangle"></i>
+                            <p>Error loading detected servers</p>
+                        </td>
+                    </tr>
+                `;
+            }
+        }
+        
+        // Check if a detected server is already in active servers (by port)
+        function isServerActive(port) {
+            return servers.some(s => s.port === port);
+        }
+        
+        // Render detected servers table
+        function renderDetectedServers() {
+            const tbody = document.getElementById('detected-servers-table-body');
+            
+            if (detectedServers.length === 0) {
+                tbody.innerHTML = `
+                    <tr class="empty-state">
+                        <td colspan="6" class="text-center py-4">
+                            <i class="bi bi-inbox"></i>
+                            <p>No servers detected from DSHelper</p>
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+            
+            tbody.innerHTML = detectedServers.map(server => {
+                const filename = server.filename || 'N/A';
+                const isActive = isServerActive(server.port);
+                
+                return `
+                    <tr>
+                        <td class="text-center"><strong>${server.id !== null ? server.id : '—'}</strong></td>
+                        <td>${escapeHtml(server.displayname || 'N/A')}</td>
+                        <td>${escapeHtml(server.server_name || 'N/A')}</td>
+                        <td><span class="badge bg-secondary">${server.port || 'N/A'}</span></td>
+                        <td><code class="small">${escapeHtml(filename)}</code></td>
+                        <td>
+                            <button class="btn btn-add-active" onclick='addToActive(${JSON.stringify(server.server_name)}, ${server.port}, ${JSON.stringify(server.filename || "")})' ${isActive ? 'disabled' : ''} style="${isActive ? 'opacity: 0.5; cursor: not-allowed;' : ''}">
+                                <i class="bi bi-plus-circle"></i> Add to Active
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+        
+        // Add detected server to active servers
+        async function addToActive(serverName, port, path) {
+            console.log('[DEBUG-JS] ========================================');
+            console.log('[DEBUG-JS] addToActive called');
+            console.log('[DEBUG-JS] serverName:', serverName);
+            console.log('[DEBUG-JS] port:', port);
+            console.log('[DEBUG-JS] path (raw):', path);
+            console.log('[DEBUG-JS] path type:', typeof path);
+            console.log('[DEBUG-JS] path length:', path ? path.length : 0);
+            if (path) {
+                console.log('[DEBUG-JS] path char codes:', Array.from(path).map(c => c.charCodeAt(0)));
+            }
+            
+            try {
+                const payload = {
+                    server_name: serverName,
+                    port: port,
+                    landscape: 'AA3',
+                    path: path || null
+                };
+                
+                console.log('[DEBUG-JS] Payload to send:', payload);
+                console.log('[DEBUG-JS] Payload JSON:', JSON.stringify(payload));
+                console.log('[DEBUG-JS] ========================================');
+                
+                // Default to AA3 landscape - user can change it later
+                const response = await fetch('/api/servers', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload)
+                });
+                
+                if (response.ok) {
+                    showAlert(`Server "${serverName}" added to Active Servers!`, 'success');
+                    await fetchServers();
+                    renderDetectedServers(); // Re-render to disable button
+                } else {
+                    const error = await response.json();
+                    showAlert(error.error || 'Failed to add server', 'danger');
+                }
+            } catch (error) {
+                showAlert('Error: ' + error.message, 'danger');
+            }
+        }
+        
+        // Refresh detected servers
+        async function refreshDetectedServers() {
+            const tbody = document.getElementById('detected-servers-table-body');
+            tbody.innerHTML = `
+                <tr class="empty-state">
+                    <td colspan="6" class="text-center py-4">
+                        <i class="bi bi-arrow-clockwise spin"></i>
+                        <p>Refreshing...</p>
+                    </td>
+                </tr>
+            `;
+            await fetchDetectedServers();
+            showAlert('Detected servers refreshed!', 'info');
+        }
         
         // Fetch landscapes on load
         async function fetchLandscapes() {
@@ -976,20 +1564,11 @@ DASHBOARD_HTML = """
                 const response = await fetch('/api/landscapes');
                 const data = await response.json();
                 landscapes = data.landscapes;
-                
-                // Populate landscape dropdown
-                const select = document.getElementById('server-landscape');
-                if (landscapes.length === 0) {
-                    select.innerHTML = '<option value="">No landscapes found in C:\\Condor3\\Landscapes</option>';
-                } else {
-                    select.innerHTML = landscapes.map(l => 
-                        `<option value="${l}"${l === 'AA3' ? ' selected' : ''}>${l}</option>`
-                    ).join('');
-                }
+                // No dropdown to populate anymore - landscapes are used in renderServers()
             } catch (error) {
                 console.error('Error fetching landscapes:', error);
-                const select = document.getElementById('server-landscape');
-                select.innerHTML = '<option value="AA3">AA3 (default)</option>';
+                // Set default if fetch fails
+                landscapes = ['AA3'];
             }
         }
         
@@ -1011,7 +1590,7 @@ DASHBOARD_HTML = """
             if (servers.length === 0) {
                 tbody.innerHTML = `
                     <tr class="empty-state">
-                        <td colspan="6">
+                        <td colspan="8">
                             <i class="bi bi-inbox"></i>
                             <p>No servers configured yet. Add one below to get started!</p>
                         </td>
@@ -1022,16 +1601,18 @@ DASHBOARD_HTML = """
             
             tbody.innerHTML = servers.map(server => {
                 // Handle countdown status
-                let statusClass, statusText, isRunning;
+                let statusClass, statusText, isRunning, isCountdown;
                 if (server.status.startsWith('starting_')) {
                     const countdown = server.status.split('_')[1];
                     statusClass = 'status-starting';
                     statusText = `Starting in ${countdown}s`;
                     isRunning = true; // Disable controls during countdown
+                    isCountdown = true;
                 } else {
                     statusClass = `status-${server.status}`;
                     statusText = server.status.charAt(0).toUpperCase() + server.status.slice(1);
                     isRunning = server.status !== 'off';
+                    isCountdown = false;
                 }
                 const pid = server.pid || '—';
                 
@@ -1039,9 +1620,24 @@ DASHBOARD_HTML = """
                 const landscapeDisabled = isRunning ? 'disabled' : '';
                 const landscapeTitle = isRunning ? 'Stop server to change landscape' : 'Click to change landscape';
                 
+                const groupId = server.group_id || '';
+                const groupDisabled = isRunning ? 'disabled' : '';
+                const groupTitle = isRunning ? 'Stop server to change group' : 'Click to assign group';
+                
+                const path = server.path || 'N/A';
+                const hasGroup = !!server.group;
+                
                 return `
                     <tr>
                         <td><strong>${escapeHtml(server.server_name)}</strong></td>
+                        <td>
+                            <select class="form-select form-select-sm" ${groupDisabled} title="${groupTitle}"
+                                    onchange="updateGroup('${server.id}', this.value)"
+                                    style="min-width: 140px; ${isRunning ? 'opacity: 0.6; cursor: not-allowed;' : ''}">
+                                <option value="">— None —</option>
+                                ${groups.map(g => `<option value="${g.id}"${g.id === groupId ? ' selected' : ''}>${escapeHtml(g.name)}</option>`).join('')}
+                            </select>
+                        </td>
                         <td>
                             <select class="form-select form-select-sm" ${landscapeDisabled} title="${landscapeTitle}" 
                                     onchange="updateLandscape('${server.id}', this.value)" 
@@ -1050,6 +1646,7 @@ DASHBOARD_HTML = """
                             </select>
                         </td>
                         <td><span class="badge bg-secondary">${server.port}</span></td>
+                        <td><code class="small">${escapeHtml(path)}</code></td>
                         <td><code>${pid}</code></td>
                         <td>
                             <span class="status-led ${statusClass}"></span>
@@ -1057,49 +1654,118 @@ DASHBOARD_HTML = """
                         </td>
                         <td>
                             ${isRunning ? 
-                                `<button class="btn btn-danger btn-action btn-sm" onclick="stopServer('${server.id}')">
-                                    <i class="bi bi-stop-circle"></i> Stop
+                                `<button class="btn btn-${isCountdown ? 'warning' : 'danger'} btn-action btn-sm" onclick="stopServer('${server.id}')">
+                                    <i class="bi bi-${isCountdown ? 'x-circle' : 'stop-circle'}"></i> ${isCountdown ? 'Cancel' : 'Stop'}
                                 </button>` :
-                                `<button class="btn btn-success btn-action btn-sm" onclick="startServer('${server.id}')">
-                                    <i class="bi bi-play-circle"></i> Start
-                                </button>`
+                                `<div>
+                                    <button class="btn btn-success btn-action btn-sm" onclick="startServer('${server.id}')" ${hasGroup ? '' : 'disabled'}>
+                                        <i class="bi bi-play-circle"></i> Start
+                                    </button>
+                                    ${!hasGroup ? '<div class="group-required-warning"><i class="bi bi-exclamation-triangle"></i> Select a Group first</div>' : ''}
+                                </div>`
                             }
                             <button class="btn btn-secondary btn-action btn-sm" onclick="deleteServer('${server.id}')">
-                                <i class="bi bi-trash"></i> Delete
+                                <i class="bi bi-x-circle"></i> Remove
                             </button>
                         </td>
                     </tr>
                 `;
             }).join('');
         }
-        
-        // Add server
-        document.getElementById('add-server-form').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            
-            const serverName = document.getElementById('server-name').value.trim();
-            const port = parseInt(document.getElementById('server-port').value);
-            const landscape = document.getElementById('server-landscape').value;
-            
+
+        // Groups API
+        async function fetchGroups() {
             try {
-                const response = await fetch('/api/servers', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({server_name: serverName, port: port, landscape: landscape})
-                });
-                
-                if (response.ok) {
-                    showAlert(`Server "${serverName}" added successfully!`, 'success');
-                    document.getElementById('add-server-form').reset();
-                    fetchServers();
-                } else {
-                    const error = await response.json();
-                    showAlert(error.error || 'Failed to add server', 'danger');
-                }
-            } catch (error) {
-                showAlert('Error: ' + error.message, 'danger');
+                const response = await fetch('/api/groups');
+                const data = await response.json();
+                groups = data.groups || [];
+                renderGroups();
+                // Also re-render servers to refresh dropdowns
+                renderServers();
+            } catch (e) {
+                console.error('Error fetching groups', e);
             }
-        });
+        }
+
+        function renderGroups() {
+            const tbody = document.getElementById('groups-table-body');
+            if (!tbody) return;
+            if (!groups || groups.length === 0) {
+                tbody.innerHTML = `
+                    <tr class="empty-state">
+                        <td colspan="2" class="text-center py-4">
+                            <i class="bi bi-inbox"></i>
+                            <p>No groups yet. Create one to organize servers.</p>
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+            // Compute member counts from current servers
+            const counts = {};
+            (servers || []).forEach(s => {
+                if (s.group_id) counts[s.group_id] = (counts[s.group_id] || 0) + 1;
+            });
+            tbody.innerHTML = groups.map(g => `
+                <tr>
+                    <td><strong>${escapeHtml(g.name)}</strong></td>
+                    <td>${counts[g.id] || 0}</td>
+                </tr>
+            `).join('');
+        }
+
+        async function addGroup() {
+            const input = document.getElementById('group-name-input');
+            const name = (input?.value || '').trim();
+            if (!name) { showAlert('Enter a group name', 'warning'); return; }
+            try {
+                const resp = await fetch('/api/groups', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name})});
+                const result = await resp.json();
+                if (resp.ok) {
+                    showAlert('Group added!', 'success');
+                    input.value = '';
+                    await fetchGroups();
+                } else {
+                    showAlert(result.error || 'Failed to add group', 'danger');
+                }
+            } catch (e) {
+                showAlert('Error: ' + e.message, 'danger');
+            }
+        }
+
+        async function refreshGroups() {
+            const tbody = document.getElementById('groups-table-body');
+            if (tbody) {
+                tbody.innerHTML = `
+                    <tr class="empty-state">
+                        <td colspan="2" class="text-center py-4">
+                            <i class="bi bi-arrow-clockwise spin"></i>
+                            <p>Refreshing...</p>
+                        </td>
+                    </tr>
+                `;
+            }
+            await fetchGroups();
+            showAlert('Groups refreshed!', 'info');
+        }
+
+        async function updateGroup(serverId, groupId) {
+            try {
+                const resp = await fetch(`/api/servers/${serverId}/group`, { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({group_id: groupId})});
+                const result = await resp.json();
+                if (resp.ok) {
+                    showAlert('Group updated', 'success');
+                    await fetchServers();
+                    renderGroups();
+                } else {
+                    showAlert(result.error || 'Failed to update group', 'danger');
+                    await fetchServers();
+                }
+            } catch (e) {
+                showAlert('Error: ' + e.message, 'danger');
+                await fetchServers();
+            }
+        }
         
         // Start server
         async function startServer(serverId) {
@@ -1118,14 +1784,16 @@ DASHBOARD_HTML = """
             }
         }
         
-        // Stop server
+        // Stop server or cancel countdown
         async function stopServer(serverId) {
             try {
                 const response = await fetch(`/api/servers/${serverId}/stop`, {method: 'POST'});
                 const result = await response.json();
                 
                 if (response.ok) {
-                    showAlert('Server stopped successfully!', 'info');
+                    const message = result.message || 'Server stopped successfully!';
+                    const alertType = message.includes('cancelled') ? 'warning' : 'info';
+                    showAlert(message, alertType);
                     fetchServers();
                 } else {
                     showAlert(result.error || 'Failed to stop server', 'danger');
@@ -1137,14 +1805,15 @@ DASHBOARD_HTML = """
         
         // Delete server
         async function deleteServer(serverId) {
-            if (!confirm('Are you sure you want to delete this server?')) return;
+            if (!confirm('Are you sure you want to remove this server?')) return;
             
             try {
                 const response = await fetch(`/api/servers/${serverId}`, {method: 'DELETE'});
                 
                 if (response.ok) {
                     showAlert('Server deleted successfully!', 'info');
-                    fetchServers();
+                    await fetchServers();
+                    renderDetectedServers(); // Update detected servers to show "Add to Active" button
                 } else {
                     showAlert('Failed to delete server', 'danger');
                 }
@@ -1192,7 +1861,7 @@ DASHBOARD_HTML = """
         
         // Show instructions
         function showInstructions() {
-            alert('Instructions:\\n\\n1. Add a server by entering a name and port\\n2. Click Start to begin sniffing UDP packets\\n3. Monitor status with the LED indicator\\n4. Click Stop to terminate the sniffer\\n5. Delete servers you no longer need\\n\\nNote: This application requires administrator privileges to capture network packets.');
+            alert('Instructions:\\n\\n1. Add a server by entering a name and port\\n2. Click Start to begin sniffing UDP packets\\n3. Monitor status with the LED indicator\\n4. Click Stop to terminate the sniffer\\n5. Delete servers you no longer need\\n\\nNote: This application may require administrator privileges to capture network packets.');
         }
         
         // Show help
@@ -1250,7 +1919,10 @@ DASHBOARD_HTML = """
         
         // Initial load
         fetchLandscapes();
+        fetchGroups();
         fetchServers();
+        fetchDetectedServers();
+        fetchDetectedLandscapes();
     </script>
 </body>
 </html>
@@ -1271,12 +1943,20 @@ def auto_start_server_with_countdown(server, delay_seconds):
     # Countdown loop
     for remaining in range(delay_seconds, 0, -1):
         with auto_start_lock:
+            # Check if countdown was cancelled
+            if server_id not in auto_start_countdowns:
+                print(f"[AUTO-START] {server_name}: Countdown cancelled by user")
+                return
             auto_start_countdowns[server_id] = remaining
         print(f"[AUTO-START] {server_name}: Starting in {remaining}...")
         time.sleep(1)
     
-    # Remove from countdown tracking
+    # Check one more time before starting
     with auto_start_lock:
+        if server_id not in auto_start_countdowns:
+            print(f"[AUTO-START] {server_name}: Countdown cancelled by user")
+            return
+        # Remove from countdown tracking
         auto_start_countdowns.pop(server_id, None)
     
     # Start the server
@@ -1303,6 +1983,10 @@ def start_auto_start_sequence():
     
     # Start each server in a separate thread with staggered delays
     for index, server in enumerate(servers):
+        # Skip servers with no Soaring Group set
+        if not server.get('group'):
+            print(f"[AUTO-START] {server['server_name']}: Skipping (no Soaring Group assigned)")
+            continue
         # Skip servers that are already running
         if server.get('pid') and is_process_running(server['pid']):
             print(f"[AUTO-START] {server['server_name']}: Already running (PID: {server['pid']}), skipping")
@@ -1310,6 +1994,10 @@ def start_auto_start_sequence():
         
         # Calculate delay: first server at 5s, second at 10s, third at 15s, etc.
         delay = (index + 1) * 5
+        
+        # Initialize countdown tracking
+        with auto_start_lock:
+            auto_start_countdowns[server['id']] = delay
         
         # Start countdown thread
         thread = threading.Thread(
@@ -1325,7 +2013,38 @@ def start_auto_start_sequence():
 def print_reminder(host, port, stop_event):
     """Print periodic reminder to keep window open and visit dashboard"""
     while not stop_event.is_set():
-        print(f"\n*** Keep this window open! Go to http://{host}:{port} to configure and manage your servers ***\n")
+        # Get current server status
+        servers = config.get_all_servers()
+        
+        # Build status message
+        print("\n" + "=" * 80)
+        print("CONDOR MAP CONTROL PANEL - Keep this window open!")
+        print("=" * 80)
+        print(f"Dashboard: http://{host}:{port}")
+        print(f"Purpose: Sending UDP data to condormap.com for real-time tracking")
+        print("-" * 80)
+        
+        if servers:
+            print("Active Servers:")
+            for server in servers:
+                status = get_process_status(server)
+                pid = server.get('pid', 'N/A')
+                landscape = server.get('landscape', 'N/A')
+                port_num = server.get('port', 'N/A')
+                group = server.get('group', 'None')
+                path = server.get('path', 'N/A')
+                
+                status_icon = "●" if status in ['listening', 'transmitting'] else "○"
+                server_name = server['server_name']
+                print(f"  {status_icon} {server_name}")
+                print(f"    Group: {group} | Landscape: {landscape} | Port: {port_num}")
+                # Print path directly - it should already have backslashes from the database
+                print("    Path: " + str(path))
+                print(f"    PID: {pid} | Status: {status.upper()}")
+        else:
+            print("No servers configured. Visit dashboard to add servers.")
+        
+        print("=" * 80 + "\n")
         stop_event.wait(30)  # Wait 30 seconds or until stop event is set
 
 
@@ -1346,15 +2065,13 @@ if __name__ == '__main__':
         except ValueError:
             port = 5001
         
-        print("=" * 60)
-        print("Condor Map Dedicated Server Control Panel")
-        print("=" * 60)
-        print(f"Dashboard running at: http://{host}:{port}")
+        print("=" * 80)
+        print("CONDOR MAP DEDICATED SERVER CONTROL PANEL")
+        print("=" * 80)
+        print(f"Dashboard: http://{host}:{port}")
+        print(f"Purpose: Sending UDP data to condormap.com for real-time tracking")
         print("Press Ctrl+C to stop")
-        print("=" * 60)
-        
-        # Print initial reminder
-        print(f"\n*** Keep this window open! Go to http://{host}:{port} to configure and manage your servers ***\n")
+        print("=" * 80)
         
         # Start auto-start sequence for configured servers
         start_auto_start_sequence()
