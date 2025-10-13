@@ -160,6 +160,44 @@ def send_position_to_express(payload: dict) -> None:
     vario_f = _coerce_float(payload.get("vario_mps"))
     if vario_f is not None:
         payload_to_send["vario_mps"] = vario_f
+    
+    # Add identity data for server-side deduplication
+    identity = COOKIE_MAP.get(cookie, {})
+    if identity:
+        cn = identity.get("cn", "")
+        registration = identity.get("registration", "")
+        first_name = identity.get("first_name", "")
+        last_name = identity.get("last_name", "")
+        
+        payload_to_send["cn"] = cn
+        payload_to_send["registration"] = registration
+        payload_to_send["first_name"] = first_name
+        payload_to_send["last_name"] = last_name
+        payload_to_send["country"] = identity.get("country", "")
+        payload_to_send["aircraft"] = identity.get("aircraft", "")
+        
+        # Composite key for easy server-side deduplication
+        if cn and registration:
+            payload_to_send["cn_registration"] = f"{cn}_{registration}"
+        elif registration:
+            payload_to_send["cn_registration"] = registration
+        elif cn:
+            payload_to_send["cn_registration"] = cn
+        else:
+            payload_to_send["cn_registration"] = ""
+        
+        # Full player identifier: CN_Registration_FirstName_LastName
+        id_parts = []
+        if cn:
+            id_parts.append(cn)
+        if registration:
+            id_parts.append(registration)
+        if first_name:
+            id_parts.append(first_name)
+        if last_name:
+            id_parts.append(last_name)
+        
+        payload_to_send["id_cn_registration_firstname_lastname"] = "_".join(id_parts) if id_parts else ""
 
     # DO NOT timestamp here - will be timestamped at send time for accuracy
     # payload_to_send.setdefault("timestamp", datetime.datetime.utcnow().isoformat() + "Z")
@@ -562,82 +600,40 @@ def parse_identity_packet(hex_data: str) -> str:
         if entity_id == 20002:
             return f"[=] IDENTITY PACKET SKIPPED (entity_id=20002 is chat message)\n    - Cookie: {cookie:08x}\n    - Full HEX: {hex_data}"
 
-        # --- New, More Robust Parsing Logic ---
-
-        def find_next_string(start_offset, min_len=1, max_len=64):
-            """Scans for the next length-prefixed ASCII string."""
-            i = start_offset
-            while i < len(b):
-                # Ensure there's at least one byte for length and potential content
-                if i + 1 >= len(b):
-                    break
-                length = b[i]
-                if min_len <= length <= max_len and (i + 1 + length) <= len(b):
-                    val_bytes = b[i+1 : i+1+length]
-                    try:
-                        # Check if all bytes are printable ASCII
-                        if all(32 <= c < 127 for c in val_bytes):
-                            val = val_bytes.decode('ascii').strip()
-                            return val, i + 1 + length
-                    except UnicodeDecodeError:
-                        pass # Not a valid string, continue scanning
-                i += 1
-            return None, len(b)
-
-        def is_competition_id(s: str) -> bool:
-            """Check if a string is the long hex Competition ID."""
-            if not s or len(s) < 32:
-                return False
-            # ID is composed of hex characters and sometimes spaces
-            return all(c in '0123456789abcdefABCDEF ' for c in s)
-
-        # 1. Scan the entire packet to find all plausible strings, ignoring the Comp ID
-        all_strings = []
-        offset = 12
-        while offset < len(b):
-            # Start scan after header and any zero padding
-            if b[offset] == 0x00:
-                offset += 1
-                continue
-            
-            val, next_offset = find_next_string(offset)
-            if val:
-                if not is_competition_id(val):
-                    all_strings.append(val)
-                offset = next_offset
-            else:
-                break # No more strings found
-
-        # Filter out spurious single-character strings to prevent field shifts
-        all_strings = [s for s in all_strings if len(s) > 1]
-
-        # 2. Assign fields based on the collected strings
+        # --- FIXED-OFFSET PARSING (entity_id 20001 = full player data, entity_id 1 = abbreviated) ---
+        
+        def read_string_at_offset(offset):
+            """Read length-prefixed ASCII string at fixed offset."""
+            if offset >= len(b):
+                return ""
+            length = b[offset]
+            if length > 0 and offset + 1 + length <= len(b):
+                try:
+                    val_bytes = b[offset + 1 : offset + 1 + length]
+                    if all(32 <= c < 127 for c in val_bytes):
+                        return val_bytes.decode('ascii', errors='ignore').strip()
+                except:
+                    pass
+            return ""
+        
         first_name, last_name, country, registration, cn, aircraft = "", "", "", "", "", ""
         
-        if not all_strings:
-            # Packet contained no usable strings, do nothing.
-            pass
-        else:
-            # The last valid string in the packet is the aircraft name
-            aircraft = all_strings.pop()
-
-            # Assign the remaining fields in their expected order
-            # This handles cases where some fields might be missing
-            if len(all_strings) > 0:
-                fields_in_order = [None] * 5 # first_name, last_name, country, reg, cn
-                for i in range(min(len(all_strings), 5)):
-                    fields_in_order[i] = all_strings[i]
-                
-                first_name, last_name, country, registration, cn = fields_in_order
-                
-                # Clean up None values to empty strings
-                first_name = first_name or ""
-                last_name = last_name or ""
-                country = country or ""
-                registration = registration or ""
-                cn = cn or ""
-
-        # --- End New Logic ---
+        if entity_id == 20001:
+            # Full player data packet (224 bytes) - use fixed offsets
+            first_name = read_string_at_offset(19)
+            last_name = read_string_at_offset(36)
+            country = read_string_at_offset(53)
+            registration = read_string_at_offset(70)
+            cn = read_string_at_offset(78)
+            aircraft = read_string_at_offset(189)
+            
+        elif entity_id == 1:
+            # Abbreviated packet (45 bytes) - only has abbreviated name at offset 12
+            # DO NOT use this data - it's incomplete and causes "D.Redman" as aircraft bug
+            # Skip parsing entity_id=1 packets to avoid overwriting good data
+            return f"[=] IDENTITY PACKET SKIPPED (entity_id=1 is abbreviated format)\n    - Cookie: {cookie:08x}"
+        
+        # --- End Fixed-Offset Parsing ---
 
         # Update mappings (preserve existing non-empty fields)
         existing = COOKIE_MAP.get(cookie, {})

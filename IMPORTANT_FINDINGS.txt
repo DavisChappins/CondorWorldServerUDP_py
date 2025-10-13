@@ -1,0 +1,12 @@
+3f00/3f01 packets:
+Offset 78: CN field (like "RED", "SHM") - 100% consistent
+Offset 189: Aircraft field (like "LS8neo", "ASW28-15") - 100% consistent
+THESE ARE FIXED ALWAYS
+there rest are vairable 
+
+    first_name:   'David'
+    last_name:    'Redman'
+    country:      'Australia'
+    registration: 'CL-BASE'
+    cn:           'RED'
+    aircraft:     'LS8neo'

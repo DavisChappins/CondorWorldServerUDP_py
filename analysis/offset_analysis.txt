@@ -1,0 +1,180 @@
+================================================================================
+PACKET OFFSET ANALYSIS
+================================================================================
+Analyzing: logs/6476_hex_log_3f00_3f01_20251009_041016.txt
+
+Total packets analyzed: 5858
+Unique structures found: 6
+
+================================================================================
+STRUCTURE: entity_1_len_45
+================================================================================
+Entity ID: 1
+Packet Length: 45 bytes
+Sample Count: 682
+
+OFFSET ANALYSIS:
+--------------------------------------------------------------------------------
+Offset  12: Used in  682/ 682 packets (100.0%) | Len: 4-11 (avg 6.8)
+           Samples: ['P.kk', 'P.Bernstein', 'S.Minar', 'Q.Le', 'R.Zerbe']
+
+EXAMPLE PACKETS:
+--------------------------------------------------------------------------------
+Example 1: Cookie b49deded | Seq 771
+  Offset  12: 'S.Minar' (len=7)
+
+Example 2: Cookie b4ededea | Seq 2843
+  Offset  12: 'T.Tracy' (len=7)
+
+Example 3: Cookie b49deded | Seq 771
+  Offset  12: 'S.Minar' (len=7)
+
+
+================================================================================
+STRUCTURE: entity_20001_len_224
+================================================================================
+Entity ID: 20001
+Packet Length: 224 bytes
+Sample Count: 4561
+
+OFFSET ANALYSIS:
+--------------------------------------------------------------------------------
+Offset  19: Used in  715/4561 packets ( 15.7%) | Len: 0-0 (avg 0.0)
+           Samples: []
+Offset  36: Used in  715/4561 packets ( 15.7%) | Len: 0-0 (avg 0.0)
+           Samples: []
+Offset  51: Used in  471/4561 packets ( 10.3%) | Len: 0-0 (avg 0.0)
+           Samples: []
+Offset  53: Used in  715/4561 packets ( 15.7%) | Len: 0-0 (avg 0.0)
+           Samples: []
+Offset  70: Used in  715/4561 packets ( 15.7%) | Len: 0-0 (avg 0.0)
+           Samples: []
+Offset  78: Used in 4561/4561 packets (100.0%) | Len: 3-3 (avg 3.0)
+           Samples: ['SHM', 'TT2']
+Offset 189: Used in 4561/4561 packets (100.0%) | Len: 6-8 (avg 6.8)
+           Samples: ['ASW28-15', 'LS8neo']
+
+EXAMPLE PACKETS:
+--------------------------------------------------------------------------------
+Example 1: Cookie b49deded | Seq 5124
+  Offset  78: 'SHM' (len=3)
+  Offset 189: 'LS8neo' (len=6)
+
+Example 2: Cookie b49deded | Seq 1044
+  Offset  78: 'SHM' (len=3)
+  Offset 189: 'LS8neo' (len=6)
+
+Example 3: Cookie b49deded | Seq 5381
+  Offset  78: 'SHM' (len=3)
+  Offset 189: 'LS8neo' (len=6)
+
+
+================================================================================
+STRUCTURE: entity_20008_len_13
+================================================================================
+Entity ID: 20008
+Packet Length: 13 bytes
+Sample Count: 137
+
+OFFSET ANALYSIS:
+--------------------------------------------------------------------------------
+
+EXAMPLE PACKETS:
+--------------------------------------------------------------------------------
+Example 1: Cookie b69dedf5 | Seq 60787
+
+Example 2: Cookie b69dedf5 | Seq 20797
+
+Example 3: Cookie b69dedf5 | Seq 34419
+
+
+================================================================================
+STRUCTURE: entity_20018_len_12
+================================================================================
+Entity ID: 20018
+Packet Length: 12 bytes
+Sample Count: 21
+
+OFFSET ANALYSIS:
+--------------------------------------------------------------------------------
+
+EXAMPLE PACKETS:
+--------------------------------------------------------------------------------
+Example 1: Cookie 41590c1f | Seq 27262
+
+Example 2: Cookie 41590c1f | Seq 39094
+
+Example 3: Cookie 41590c1f | Seq 56610
+
+
+================================================================================
+STRUCTURE: entity_20020_len_14
+================================================================================
+Entity ID: 20020
+Packet Length: 14 bytes
+Sample Count: 1
+
+OFFSET ANALYSIS:
+--------------------------------------------------------------------------------
+
+EXAMPLE PACKETS:
+--------------------------------------------------------------------------------
+Example 1: Cookie 3d350019 | Seq 787
+
+
+================================================================================
+STRUCTURE: entity_2_len_12
+================================================================================
+Entity ID: 2
+Packet Length: 12 bytes
+Sample Count: 456
+
+OFFSET ANALYSIS:
+--------------------------------------------------------------------------------
+
+EXAMPLE PACKETS:
+--------------------------------------------------------------------------------
+Example 1: Cookie b4ddede9 | Seq 3678
+
+Example 2: Cookie b4ddede9 | Seq 2695
+
+Example 3: Cookie b4ddede9 | Seq 3981
+
+
+================================================================================
+SUMMARY
+================================================================================
+
+entity_1_len_45:
+  Packets: 682
+  Fixed offsets (>95% consistent): [12]
+  Variable offsets (<=95%): []
+
+entity_20001_len_224:
+  Packets: 4561
+  Fixed offsets (>95% consistent): [78, 189]
+  Variable offsets (<=95%): [19, 36, 51, 53, 70]
+
+entity_20008_len_13:
+  Packets: 137
+  Fixed offsets (>95% consistent): []
+  Variable offsets (<=95%): []
+
+entity_20018_len_12:
+  Packets: 21
+  Fixed offsets (>95% consistent): []
+  Variable offsets (<=95%): []
+
+entity_20020_len_14:
+  Packets: 1
+  Fixed offsets (>95% consistent): []
+  Variable offsets (<=95%): []
+
+entity_2_len_12:
+  Packets: 456
+  Fixed offsets (>95% consistent): []
+  Variable offsets (<=95%): []
+
+================================================================================
+
+Analysis saved to: analysis/offset_analysis.txt

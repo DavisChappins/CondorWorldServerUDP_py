@@ -1,0 +1,228 @@
+====================================================================================================
+FIELD OFFSET VARIABILITY ANALYSIS
+====================================================================================================
+Analyzing: logs/6476_hex_log_3f00_3f01_20251009_041016.txt
+
+Total entity_id=20001 packets analyzed: 4561
+
+PACKETS BY FIELD COUNT:
+----------------------------------------------------------------------------------------------------
+  2 fields: 3846 packets
+  5 fields: 63 packets
+  6 fields: 652 packets
+
+====================================================================================================
+COMPLETE PACKETS (6 fields) - 652 packets
+====================================================================================================
+
+OFFSET VARIABILITY TABLE:
+----------------------------------------------------------------------------------------------------
+Cookie       first_name                last_name                 country                   registration              cn              aircraft       
+             offset->len->next         offset->len->next         offset->len->next         offset->len->next         offset->len->next offset->len->next
+----------------------------------------------------------------------------------------------------
+
+Showing all 31 unique players:
+
+b0cdedf3      19-> 5-> 25 'Shico'       36-> 8-> 45 'figueira'    53-> 6-> 60 'Brazil'      70-> 4-> 75 '1309'        78-> 3-> 82 'GUN' 189-> 8->198 'ASW28-15'
+b40dede6      19-> 5-> 25 'Cliff'       36-> 9-> 46 'Jefferie'    53-> 9-> 63 'Australi'    70-> 6-> 77 'VH-CQR'      78-> 3-> 82 '107' 189-> 8->198 'Discus2a'
+b41dede7      19-> 5-> 25 'Peter'       36-> 4-> 41 'Fuss'        53->13-> 67 'United S'    70-> 6-> 77 'N800PF'      78-> 2-> 81 'F8' 189-> 8->198 'Discus2a'
+b44dede2      19-> 6-> 26 'Philip'      36-> 9-> 46 'Bernstei'    53->13-> 67 'United S'    70-> 6-> 77 'N916SA'      78-> 3-> 82 'PB5' 189-> 6->196 'LS8neo'
+b45dede3      19-> 4-> 24 'Doug'        36->12-> 49 'Krzywdzi'    53->13-> 67 'United S'    70-> 4-> 75 '0412'        78-> 3-> 82 'K12' 189-> 6->196 'LS8neo'
+b46dede4      19-> 5-> 25 'Shico'       36-> 8-> 45 'figueira'    53-> 6-> 60 'Brazil'      70-> 4-> 75 '1309'        78-> 3-> 82 'GUN' 189-> 8->198 'Discus2a'
+b47dede5      19-> 4-> 24 'Neva'        36-> 4-> 41 'Bull'        53-> 9-> 63 'Australi'    70-> 3-> 74 'XOH'         78-> 3-> 82 '002' 189-> 6->196 'LS8neo'
+b49deded      19-> 5-> 25 'Steve'       36-> 5-> 42 'Minar'       53->13-> 67 'United S'    70-> 6-> 77 'N1701S'      78-> 3-> 82 'SHM' 189-> 6->196 'LS8neo'
+b4cdede8      19-> 6-> 26 'Robert'      36-> 5-> 42 'Zerbe'       53->13-> 67 'United S'    70-> 6-> 77 'N992RZ'      78-> 2-> 81 'RZ' 189-> 6->196 'LS8neo'
+b4ededea      19-> 4-> 24 'Todd'        36-> 5-> 42 'Tracy'       53->13-> 67 'United S'    70-> 6-> 77 'N504TT'      78-> 3-> 82 'TT2' 189-> 6->196 'LS8neo'
+b51dedfa      19-> 5-> 25 'Chris'       36-> 4-> 41 'Grab'        53->13-> 67 'United S'    70-> 5-> 76 'N1165'       78-> 2-> 81 'KG' 189-> 6->196 'LS8neo'
+b52dedfd      19-> 3-> 23 'Ken'         36-> 8-> 45 'Anderson'    53-> 9-> 63 'Australi'    70-> 6-> 77 'VH-GKA'      78-> 3-> 82 'GKA' 189-> 6->196 'LS8neo'
+b54dedf9      19-> 6-> 26 'Carlos'      36-> 8-> 45 'Mikelsen'    53-> 9-> 63 'Argentin'    70-> 2-> 73 '09'          78-> 3-> 82 'CM2' 189-> 8->198 'Discus2a'
+b56dedfb      19-> 6-> 26 'Robert'      36-> 5-> 42 'Zerbe'       53->13-> 67 'United S'    70-> 6-> 77 'N992RZ'      78-> 2-> 81 'RZ' 189-> 6->196 'LS8neo'
+b57dedf8      19-> 5-> 25 'Quinn'       36-> 2-> 39 'Le'          53->13-> 67 'United S'    70-> 7-> 78 'US-YOLO'     78-> 3-> 82 'RIZ' 189-> 8->198 'ASW28-15'
+b59dede4      19-> 5-> 25 'Shico'       36-> 8-> 45 'figueira'    53-> 6-> 60 'Brazil'      70-> 4-> 75 '1309'        78-> 3-> 82 'GUN' 189-> 8->198 'Discus2a'
+b5adede0      19-> 5-> 25 'Peter'       36->10-> 47 'Plackows'    53->13-> 67 'United S'    70-> 6-> 77 'N710SS'      78-> 3-> 82 '296' 189-> 8->198 'ASW28-15'
+b5bdede1      19-> 5-> 25 'Frank'       36-> 7-> 44 'Paynter'     53->13-> 67 'United S'    70-> 6-> 77 'N128PF'      78-> 3-> 82 'TA3' 189-> 8->198 'ASW28-15'
+b5cdedff      19-> 5-> 25 'David'       36-> 6-> 43 'Redman'      53-> 9-> 63 'Australi'    70-> 7-> 78 'CL-BASE'     78-> 3-> 82 'RED' 189-> 6->196 'LS8neo'
+b5ddedfc      19-> 4-> 24 'Mark'        36-> 6-> 43 'Rebuck'      53->13-> 67 'United S'    70-> 5-> 76 'HENRY'       78-> 3-> 82 '821' 189-> 6->196 'LS8neo'
+b5ededfe      19-> 7-> 27 'Brendon'     36-> 6-> 43 'Taylor'      53-> 9-> 63 'Australi'    70-> 6-> 77 'VH-GWK'      78-> 2-> 81 'L9' 189-> 6->196 'LS8neo'
+b61dedf1      19-> 5-> 25 'Davis'       36-> 8-> 45 'Chappins'    53->13-> 67 'United S'    70-> 3-> 74 'DC1'         78-> 3-> 82 'DC1' 189-> 6->196 'LS8neo'
+b65dede9      19-> 2-> 22 'Pk'          36-> 2-> 39 'kk'          53-> 6-> 60 'Canada'      70-> 6-> 77 'CF-BDB'      78-> 2-> 81 '57' 189-> 6->196 'LS8neo'
+b66dedeb      19-> 9-> 29 'CRISTIAN'    36-> 7-> 44 'CONRADO'     53-> 6-> 60 'Brazil'      70-> 6-> 77 'BR-CON'      78-> 3-> 82 'CON' 189-> 8->198 'Discus2a'
+b67dede8      19-> 4-> 24 'John'        36-> 5-> 42 'Blyth'       53-> 9-> 63 'Australi'    70-> 6-> 77 'VH-GQL'      78-> 3-> 82 'GJB' 189-> 6->196 'LS8neo'
+b69dedf5      19-> 4-> 24 'Juan'        36-> 9-> 46 'SanMarti'    53-> 9-> 63 'Argentin'    70-> 6-> 77 'LV-BND'      78-> 3-> 82 'VAP' 189-> 8->198 'Discus2a'
+b6adedf7      19-> 2-> 22 'Pk'          36-> 2-> 39 'kk'          53-> 6-> 60 'Canada'      70-> 6-> 77 'CF-BDB'      78-> 2-> 81 '57' 189-> 6->196 'LS8neo'
+b6bdedf4      19-> 5-> 25 'Davis'       36-> 8-> 45 'Chappins'    53->13-> 67 'United S'    70-> 3-> 74 'DC1'         78-> 3-> 82 'DC1' 189-> 6->196 'LS8neo'
+b6ddedf0      19-> 9-> 29 'CRISTIAN'    36-> 7-> 44 'CONRADO'     53-> 6-> 60 'Brazil'      70-> 6-> 77 'BR-CON'      78-> 3-> 82 'CON' 189-> 8->198 'Discus2a'
+b6ededf2      19-> 9-> 29 'CRISTIAN'    36-> 7-> 44 'CONRADO'     53-> 6-> 60 'Brazil'      70-> 6-> 77 'BR-CON'      78-> 3-> 82 'CON' 189-> 8->198 'Discus2a'
+b7ddedf2      19-> 5-> 25 'Peter'       36-> 4-> 41 'Fuss'        53->13-> 67 'United S'    70-> 6-> 77 'N800PF'      78-> 2-> 81 'F8' 189-> 8->198 'Discus2a'
+
+====================================================================================================
+OFFSET STATISTICS FOR EACH FIELD
+====================================================================================================
+
+FIELD: first_name
+  Offset range: 19 - 19 (variability: 0 bytes)
+  Unique offsets: 1
+  String length: 2 - 9 (avg: 5.0)
+  Samples: ['Steve', 'Steve', 'Steve', 'Steve', 'Steve']
+  Is offset fixed? YES
+
+FIELD: last_name
+  Offset range: 36 - 36 (variability: 0 bytes)
+  Unique offsets: 1
+  String length: 2 - 12 (avg: 6.3)
+  Samples: ['Minar', 'Minar', 'Minar', 'Minar', 'Minar']
+  Is offset fixed? YES
+
+FIELD: country
+  Offset range: 53 - 53 (variability: 0 bytes)
+  Unique offsets: 1
+  String length: 6 - 13 (avg: 10.4)
+  Samples: ['United States', 'United States', 'United States', 'United States', 'United States']
+  Is offset fixed? YES
+
+FIELD: registration
+  Offset range: 70 - 70 (variability: 0 bytes)
+  Unique offsets: 1
+  String length: 2 - 7 (avg: 5.3)
+  Samples: ['N1701S', 'N1701S', 'N1701S', 'N1701S', 'N1701S']
+  Is offset fixed? YES
+
+FIELD: cn
+  Offset range: 78 - 78 (variability: 0 bytes)
+  Unique offsets: 1
+  String length: 2 - 3 (avg: 2.7)
+  Samples: ['SHM', 'SHM', 'SHM', 'SHM', 'SHM']
+  Is offset fixed? YES
+
+FIELD: aircraft
+  Offset range: 189 - 189 (variability: 0 bytes)
+  Unique offsets: 1
+  String length: 6 - 8 (avg: 6.9)
+  Samples: ['LS8neo', 'LS8neo', 'LS8neo', 'LS8neo', 'LS8neo']
+  Is offset fixed? YES
+
+====================================================================================================
+PARTIAL PACKETS (2 fields) - 3846 packets
+====================================================================================================
+
+OFFSET TABLE:
+----------------------------------------------------------------------------------------------------
+Cookie       cn                             aircraft                      
+             offset->len->next              offset->len->next             
+----------------------------------------------------------------------------------------------------
+b49deded      78-> 3-> 82 'SHM'             189-> 6->196 'LS8neo'         
+b49deded      78-> 3-> 82 'SHM'             189-> 6->196 'LS8neo'         
+b49deded      78-> 3-> 82 'SHM'             189-> 6->196 'LS8neo'         
+b49deded      78-> 3-> 82 'SHM'             189-> 6->196 'LS8neo'         
+b49deded      78-> 3-> 82 'SHM'             189-> 6->196 'LS8neo'         
+b49deded      78-> 3-> 82 'SHM'             189-> 6->196 'LS8neo'         
+b49deded      78-> 3-> 82 'SHM'             189-> 6->196 'LS8neo'         
+b49deded      78-> 3-> 82 'SHM'             189-> 6->196 'LS8neo'         
+b49deded      78-> 3-> 82 'SHM'             189-> 6->196 'LS8neo'         
+b49deded      78-> 3-> 82 'SHM'             189-> 6->196 'LS8neo'         
+b49deded      78-> 3-> 82 'SHM'             189-> 6->196 'LS8neo'         
+b49deded      78-> 3-> 82 'SHM'             189-> 6->196 'LS8neo'         
+b4ededea      78-> 3-> 82 'TT2'             189-> 8->198 'ASW28-15'       
+b4ededea      78-> 3-> 82 'TT2'             189-> 8->198 'ASW28-15'       
+b4ededea      78-> 3-> 82 'TT2'             189-> 8->198 'ASW28-15'       
+b4ededea      78-> 3-> 82 'TT2'             189-> 8->198 'ASW28-15'       
+b4ededea      78-> 3-> 82 'TT2'             189-> 8->198 'ASW28-15'       
+b4ededea      78-> 3-> 82 'TT2'             189-> 8->198 'ASW28-15'       
+b4ededea      78-> 3-> 82 'TT2'             189-> 8->198 'ASW28-15'       
+b4ededea      78-> 3-> 82 'TT2'             189-> 8->198 'ASW28-15'       
+
+====================================================================================================
+FIXED-OFFSET PARSING TEST (reading full field content up to next offset)
+====================================================================================================
+
+Testing fixed-offset parsing on 31 unique players:
+----------------------------------------------------------------------------------------------------
+Cookie b0cdedf3:
+  first_name:   'Shico'
+  last_name:    'figueira'
+  country:      'Brazil'
+  registration: '1309'
+  cn:           'GUN'
+  aircraft:     'ASW28-15'
+
+Cookie b40dede6:
+  first_name:   'Cliff'
+  last_name:    'Jefferies'
+  country:      'Australia'
+  registration: 'VH-CQR'
+  cn:           '107'
+  aircraft:     'Discus2a'
+
+Cookie b41dede7:
+  first_name:   'Peter'
+  last_name:    'Fuss'
+  country:      'United States'
+  registration: 'N800PF'
+  cn:           'F8'
+  aircraft:     'Discus2a'
+
+Cookie b44dede2:
+  first_name:   'Philip'
+  last_name:    'Bernstein'
+  country:      'United States'
+  registration: 'N916SA'
+  cn:           'PB5'
+  aircraft:     'LS8neo'
+
+Cookie b45dede3:
+  first_name:   'Doug'
+  last_name:    'Krzywdzinski'
+  country:      'United States'
+  registration: '0412'
+  cn:           'K12'
+  aircraft:     'LS8neo'
+
+Cookie b46dede4:
+  first_name:   'Shico'
+  last_name:    'figueira'
+  country:      'Brazil'
+  registration: '1309'
+  cn:           'GUN'
+  aircraft:     'Discus2a'
+
+Cookie b47dede5:
+  first_name:   'Neva'
+  last_name:    'Bull'
+  country:      'Australia'
+  registration: 'XOH'
+  cn:           '002'
+  aircraft:     'LS8neo'
+
+Cookie b49deded:
+  first_name:   'Steve'
+  last_name:    'Minar'
+  country:      'United States'
+  registration: 'N1701S'
+  cn:           'SHM'
+  aircraft:     'LS8neo'
+
+Cookie b4cdede8:
+  first_name:   'Robert'
+  last_name:    'Zerbe'
+  country:      'United States'
+  registration: 'N992RZ'
+  cn:           'RZ'
+  aircraft:     'LS8neo'
+
+Cookie b4ededea:
+  first_name:   'Todd'
+  last_name:    'Tracy'
+  country:      'United States'
+  registration: 'N504TT'
+  cn:           'TT2'
+  aircraft:     'LS8neo'
+
+====================================================================================================
+CONCLUSION
+====================================================================================================
+
+If a field shows 'Is offset fixed? NO', it means the offset varies
+based on the length of previous fields. This confirms that sequential
+parsing (not fixed-offset parsing) is required for those fields.
+
+Analysis saved to: analysis/field_offset_variability.txt
