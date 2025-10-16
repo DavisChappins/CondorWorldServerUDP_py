@@ -10,6 +10,51 @@ except ImportError:
     navicon_bridge = None
     print("[WARNING] navicon_bridge not available - coordinates will not be converted to lat/lon")
 
+def kg_m2_to_lb_ft2(kg_m2):
+    """Convert kg/m² to lb/ft²"""
+    # 1 kg/m² = 0.204816 lb/ft²
+    return round(kg_m2 * 0.204816, 2)
+
+def kmh_to_knots(kmh):
+    """Convert km/h to knots"""
+    # 1 km/h = 0.539957 knots
+    return round(kmh * 0.539957, 2)
+
+def extract_task_extra_details(config):
+    """Extract additional task details from FPL file sections for task_extra_details JSONB field"""
+    extra_details = {}
+    
+    # Extract from GameOptions section if it exists
+    if 'GameOptions' in config:
+        game_options = config['GameOptions']
+        
+        # MaxWingLoading
+        max_wing_loading = game_options.get('MaxWingLoading', '').strip()
+        if max_wing_loading:
+            try:
+                wing_loading_kg_m2 = float(max_wing_loading)
+                extra_details['MaxWingLoadingKgM2'] = wing_loading_kg_m2
+                extra_details['MaxWingLoadingLbFt2'] = kg_m2_to_lb_ft2(wing_loading_kg_m2)
+            except ValueError:
+                pass
+        
+        # MaxStartGroundSpeed
+        max_start_speed = game_options.get('MaxStartGroundSpeed', '').strip()
+        if max_start_speed:
+            try:
+                speed_kmh = float(max_start_speed)
+                extra_details['MaxStartGroundSpeedKmh'] = speed_kmh
+                extra_details['MaxStartGroundSpeedKt'] = kmh_to_knots(speed_kmh)
+            except ValueError:
+                pass
+        
+        # Class
+        plane_class = game_options.get('Class', '').strip()
+        if plane_class:
+            extra_details['Class'] = plane_class
+    
+    return extra_details if extra_details else None
+
 def find_trn_file(landscape_code):
     """Find the .trn file for a given landscape code"""
     script_dir = Path(__file__).parent
@@ -221,6 +266,12 @@ def parse_fpl_file(fpl_path, servers_list=None, task_server_path=None):
                 print(f"  TP{human_index}: {display_name} ({lat:.5f}, {lon:.5f}) - Radius: {tp_radius}m")
             else:
                 print(f"  TP{human_index}: {display_name} (XY: {tp_pos_x}, {tp_pos_y}) - Radius: {tp_radius}m")
+        
+        # Extract task_additional_details
+        task_additional_details = extract_task_extra_details(config)
+        if task_additional_details:
+            task_data['task_additional_details'] = task_additional_details
+            print(f"  Extracted additional details: {task_additional_details}")
         
         # Match servers by path and append at the end for readability (after Turnpoints)
         matched_servers, matched_group = match_servers_by_path(servers_list, task_server_path)
