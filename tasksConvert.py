@@ -47,9 +47,11 @@ def extract_task_extra_details(config):
                 extra_details['MaxStartGroundSpeedKt'] = kmh_to_knots(speed_kmh)
             except ValueError:
                 pass
-        
-        # Class
-        plane_class = game_options.get('Class', '').strip()
+    
+    # Extract Class from Plane section if it exists
+    if 'Plane' in config:
+        plane_section = config['Plane']
+        plane_class = plane_section.get('Class', '').strip()
         if plane_class:
             extra_details['Class'] = plane_class
     
