@@ -1,208 +1,180 @@
 # Condor Server UDP Scraper
 
-A Python tool to sniff, decode, and log UDP traffic from Condor (port 56298 by default). It parses multiple in-game packet types, reconstructs basic Flight Plan (.fpl) files from captured packets, and persists pilot identity mappings.
-
+Windows-first tooling for Condor dedicated servers:
+- `app.py`: Flask dashboard to manage multiple UDP sniffers
+- `sniffAndDecodeUDP_toExpress_viaFlask.py`: UDP sniffer/decoder/forwarder
+- `tasksGet.py` -> `tasksConvert.py` -> `tasksUpload.py`: task sync pipeline
 
 ## Requirements
 
-- **Python**: 3.9+
-- **Windows** with **Npcap** installed (Scapy uses Npcap/WinPcap for sniffing)
-- **Administrator privileges** (maybe) to capture packets
-- **Python packages** (install via `requirements.txt`):
-  - `scapy>=2.5.0`
-  - `numpy>=1.24`
-  - `Flask>=3.0`
-  - `requests>=2.31`
-  - `psutil>=5.9.0`
+### External software
+- Python 3.9+
+- Windows with **Npcap** installed (required by Scapy for packet capture)
+- Condor landscapes in `C:\Condor3\Landscapes\{landscape}\{landscape}.trn`
+- Elevated terminal (Run as Administrator) for live sniffing
 
-Install Python packages:
+Npcap download: <https://nmap.org/npcap/>
+
+### Python packages
+Install all Python dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Npcap (required on Windows): https://nmap.org/npcap/
+`requirements.txt` includes:
+- `scapy`
+- `numpy`
+- `Flask`
+- `requests`
+- `psutil`
+- `colorama` (needed by several scripts in `extra/`)
 
-Tip: Installing Wireshark also offers to install Npcap. Ensure the "Install Npcap" option is checked during Wireshark setup.
+## Quick Start (Dashboard)
 
-## Quick Start
-
-### Using the Flask Dashboard (Recommended)
-
-1. **Start the Flask dashboard** (Run as Administrator on Windows):
+1. Install dependencies (`pip install -r requirements.txt`).
+2. Install Npcap.
+3. Start dashboard as Administrator:
 
 ```bash
 python app.py
 ```
 
-2. **Open your browser** and navigate to `http://127.0.0.1:5001`
-
-3. **Activate and start the server**:
-   - Servers are automatically loaded from the dashboard helpers config file.
-   - Select the desired server from the pre-configured list.
-   - Click "Activate" to enable it, then click the green "Start" button.
-
-4. The sniffer will begin capturing packets and you'll see:
-   - Real-time status updates (Listening → Transmitting)
-   - Process ID (PID) in the dashboard
-   - Log files created in the `logs/` directory
-
-5. **Change landscape**: Stop the server, select a different landscape from the dropdown, then start again
-
-6. **Monitor multiple servers**: Activate and manage multiple pre-configured UDP sniffers simultaneously
-
-### Manual Command Line Usage (Advanced)
-
-Alternatively, you can run the sniffer directly from the command line (note: server details should still reference the config file for consistency):
-
-```bash
-python sniffAndDecodeUDP_toExpress_viaFlask.py --port 56288 --server-name "My Server" --landscape AA3
-```
-
-The sniffer will output:
-```
-[*] PID: 12345
-[*] Server Name: My Server
-[*] Landscape: AA3
-[*] TRN File: C:\Condor3\Landscapes\AA3\AA3.trn
-[*] Starting UDP packet sniffer on port 56288
-[*] Logging 3f00/3f01 HEX strings to: logs/12345_hex_log_3f00_3f01_YYYYMMDD_HHMMSS.txt
-[*] Logging 8006 HEX strings to: logs/12345_hex_log_8006_YYYYMMDD_HHMMSS.txt
-[*] Identity map JSON: logs/12345_identity_map.json
-============================================================
-```
-
-When packets arrive, decoded lines print to the console and log files. If enough FPL-related packets are captured, an `udp_fpl_YYYYMMDD_HHMMSS.fpl` is written to the repo root.
-
-## Outputs Per Run
-
-All log files are stored in the `logs/` directory:
-
-- `logs/{PID}_hex_log_3f00_3f01_*.txt` — hex-only identity/config packets.
-- `logs/{PID}_hex_log_8006_*.txt` — hex-only acknowledgement packets.
-- `logs/{PID}_identity_map.json` — cookie→identity and entity→cookie mappings (regenerated each run).
-- `logs/dashboard_{port}_stdout.log` — dashboard process stdout logs.
-- `logs/dashboard_{port}_stderr.log` — dashboard process stderr logs.
-- `udp_fpl_*.fpl` — reconstructed Flight Plan (when enough data observed) - saved in root directory.
-
-## XY → Lat/Lon Conversion
-
-The sniffer uses `navicon_bridge` to convert Condor's XY coordinates to Lat/Lon using landscape-specific terrain files:
-
-- **Landscape-specific conversion**: `navicon_bridge.xy_to_latlon_trn(trn_path, x, y)` uses:
-  - Landscape `.trn` file from `C:\Condor3\Landscapes\{landscape}\{landscape}.trn`
-  - `Condor3XY2LatLon.exe` (32-bit helper)
-
-The landscape is selected when adding a server in the dashboard or via the `--landscape` command-line argument. The script will verify the TRN file exists on startup and exit with an error if not found.
-
-## Telemetry Packet Map (0x3d00)
-
-The `0x3d00` telemetry payload is parsed as a sequence of 4-byte little-endian words. Each word is interpreted both as `u32` (little-endian) and as `float32` (`<f`). The fields used are shown below; indices are zero-based into the 4-byte words list:
-
-- **[0] cookie (u32)**
-  - Session/player cookie. Displayed in hex in logs.
-
-- **[1] unknown**
-  - Not used by current decoder.
-
-- **[2] pos_x (float32)**
-- **[3] pos_y (float32)**
-
-- **[4] altitude_m (float32)**
-  - Derived: `altitude_ft = altitude_m * 3.28084`.
-
-- **[5] vx (float32)**
-- **[6] vy (float32)**
-- **[7] vz (float32)**
-  - Derived:
-    - `speed_mps = sqrt(vx^2 + vy^2 + vz^2)`
-    - `speed_kt = speed_mps * 1.9438445`
-    - `vario_mps = vz`
-    - `vario_kt = vario_mps * 1.9438445`
-    - `heading` (degrees, 0–360) from corrected formula `atan2(-vx, vy)` then degrees and normalized.
-
-- **[8] ax (float32)**
-- **[9] ay (float32)**
-- **[10] az (float32)**
-  - Derived:
-    - `a_mag = sqrt(ax^2 + ay^2 + az^2)`
-    - `g_force = a_mag / 9.80665` (shown as "(incorrect)" pending better calibration)
-
-- **Tail fields**: the decoder preserves the last 6 words as `u32` in `tail` for inspection (`u32s[-6:]`). Their meaning is currently unknown.
-
-Endianness summary:
-- `u32`: little-endian
-- `float32`: little-endian (`struct.unpack('<f', ...)`)
-
-## Offline Replay (Optional)
-
-You can parse previously captured hex-only logs without sniffing:
-
-```bash
-python replay_hex_log.py path\to\hex_file.txt --delay-ms 5 --direction REPLAY
-```
+4. Open `http://127.0.0.1:5001`.
+5. Create at least one **Soaring Group**.
+6. Add a server (or import from DSHelper detection), choose landscape, assign group.
+7. Click **Start**.
 
 Notes:
-- `replay_hex_log.py` currently imports parsers from `scapy_udp_56298_14.py`. Keep that file present.
-- Use the specific hex logs for the packet family you want to replay, e.g. `hex_log_3d00_*.txt` for telemetry.
+- A server must have a group assigned before it can start.
+- On dashboard startup, saved servers auto-start with staggered countdowns (5s, 10s, 15s, ...).
 
-## Configuration
+## Setup Self-Test (Windows-friendly)
 
-- **Permissions**: If you get a permission error, re-run as Administrator.
+Run the included environment test before first use:
 
-## Known Limitations
+```bash
+python test_setup.py
+```
 
-- **Admin + Npcap required** on Windows for live sniffing.
-- **Condor 3 landscapes required** for coordinate conversion. The script needs access to `C:\Condor3\Landscapes\` with valid `.trn` files.
-- **G-Force displayed as "(incorrect)"**. The magnitude is computed from raw accel vectors and divided by g; may not match in-game UI.
-- **Identity parsing is heuristic**. `parse_identity_packet()` scans length-prefixed ASCII; fields may occasionally misalign or be missing.
-- **FPL reconstruction is best-effort**. The .fpl is written only after task, settings, and disabled-airspace data are sufficiently observed; content may be incomplete if packets were missed.
-- **Windows-focused**. Sniffing path is validated on Windows; other platforms are untested here.
+Or on Windows, double-click:
 
-## Troubleshooting
-- **No packets show up**:
-  - Verify the correct port and that traffic is local to the machine.
-  - Ensure Npcap is installed and you're running as Administrator.
-  - Check Windows Firewall rules.
-- **Landscape not found**:
-  - Ensure the landscape is installed in `C:\Condor3\Landscapes\{landscape}\`
-  - Verify the `.trn` file exists: `C:\Condor3\Landscapes\{landscape}\{landscape}.trn`
-  - The dashboard will only show landscapes with valid `.trn` files.
-- **Lat/Lon conversion errors**:
-  - Confirm `Condor3XY2LatLon.exe` is in the repo root.
-  - Verify the selected landscape's `.trn` file exists and is accessible.
-- **.fpl not written**:
-  - You may not have captured all required packets yet (task + settings + full/known disabled-airspaces).
-- **Dashboard won't start**:
-  - Ensure Flask is installed: `pip install flask`
-  - Check if port 5001 is already in use.
+```text
+run_test_setup.bat
+```
 
+What it checks:
+- Python version
+- Required Python modules from `requirements.txt`
+- Administrator privileges (Windows)
+- Npcap presence (Windows service/path checks)
+- Scapy interface detection and a tiny capture smoke test
 
-## Features
+The script pauses at the end on Windows so the command window stays open.
 
-- **Sniff live UDP traffic** on a configurable port (default `56298`).
-- **Decode key packet families**:
-  - `0x3d00` Telemetry: position (X/Y), altitude, speed, heading, vertical speed, accel vectors.
-  - `0x3f00 / 0x3f01` Identity/config: pilot info (CN, name, registration, country, aircraft), cookie mapping.
-  - `0x1f00` FPL task core: landscape, turnpoints with geometry.
-  - `0x0700` and `0x0f00` Disabled airspaces list (chunked).
-  - `0x2f00` Settings bundle: description, plane class (heuristic), weather zone, common options.
-  - `0x8006` Short acknowledgements.
-- **Reconstruct .fpl files** from captured task/settings/disabled-airspaces.
-- **Multiple logs** written per run (human-readable and hex-only).
-- **Identity persistence** into `identity_map.json` (regenerated each run).
-- **XY→Lat/Lon conversion** using `navicon_bridge` with landscape-specific `.trn` files from `C:\Condor3\Landscapes\`.
-- **Web dashboard** for managing multiple UDP sniffer instances with landscape selection.
+If you do not want pause behavior:
+
+```bash
+python test_setup.py --no-pause
+```
+
+## What The App Does
+
+### Dashboard (`app.py`)
+- Manage multiple sniffers by server name/port/landscape/group.
+- Detect DSHelper servers from:
+  `C:\Users\<USER>\AppData\Roaming\Hitziger Solutions\DSHelper\user_settings.xml`
+- Detect installed landscapes from `C:\Condor3\Landscapes`.
+- Track runtime status: `off`, `starting_N`, `listening`, `transmitting`, `error`.
+- Start/stop sniffer subprocesses and store persistent config in `config.json`.
+- Trigger background task sync sequence:
+  `tasksGet.py` -> `tasksConvert.py` -> `tasksUpload.py`
+  (30 minute cooldown between runs).
+
+### Sniffer (`sniffAndDecodeUDP_toExpress_viaFlask.py`)
+- Captures UDP traffic on configured port with Scapy.
+- Decodes packet families:
+  - `0x3d00`: telemetry (position, altitude, speed, heading, vario, accel)
+  - `0x3f00/0x3f01`: identity/config
+  - `0x1f00`: FPL task core
+  - `0x0700` and `0x0f00`: disabled airspaces
+  - `0x2f00`: settings bundle
+  - `0x8006`: acknowledgements
+- Converts XY to lat/lon through `navicon_bridge.py` and helper EXE(s).
+- Batches and forwards positions to CondorMap endpoint.
+- Reconstructs `udp_fpl_*.fpl` when task/settings/disabled-airspace data are complete.
+- Persists identity mappings per process.
+
+Forwarding defaults and env vars:
+- Default endpoint: `https://server.condormap.com/api/positions`
+- `EXPRESS_ENDPOINT`
+- `EXPRESS_TIMEOUT`
+
+## Output Files
+
+Created in `logs/`:
+- `logs/dashboard_{port}_stdout.log`
+- `logs/dashboard_{port}_stderr.log`
+- `logs/{PID}_hex_log_3f00_3f01_*.txt`
+- `logs/{PID}_identity_map.json`
+
+Created in repo root (when enough FPL data is captured):
+- `udp_fpl_YYYYMMDD_HHMMSS.fpl`
+
+## Offline Replay
+
+`replay_hex_log.py` replays hex logs through existing parser functions.
+
+```bash
+python replay_hex_log.py path\to\hex_log.txt --delay-ms 5 --direction REPLAY
+```
+
+Important: this script imports `sniffAndDecodeUDP_toFlask.py`. In this repo that file is currently under `extra/`, so run with an import path that includes `extra/` (or move/copy the file).
+
+PowerShell example:
+
+```powershell
+$env:PYTHONPATH="extra"
+python replay_hex_log.py logs\some_log.txt --direction REPLAY
+```
+
+## Task Sync Scripts
+
+- `tasksGet.py`
+  - Reads DSHelper scheduler data from `scheduler.dat`
+  - Writes `tasks.json`
+  - Copies referenced `.fpl` files into `flightplans/`
+- `tasksConvert.py`
+  - Converts `.fpl` files to `.json`
+  - Optionally maps XY->lat/lon using `navicon_bridge`
+  - Matches tasks to servers/groups using dashboard API or `config.json`
+- `tasksUpload.py`
+  - Uploads one or many converted tasks to CondorMap API
+  - Uses `CONDOR_API_URL` override if provided
+
+## API Endpoints (Dashboard)
+
+- `GET /api/servers`
+- `POST /api/servers`
+- `DELETE /api/servers/<server_id>`
+- `POST /api/servers/<server_id>/start`
+- `POST /api/servers/<server_id>/stop`
+- `GET /api/servers/<server_id>/status`
+- `GET /api/landscapes`
+- `PUT /api/servers/<server_id>/landscape`
+- `GET /api/dshelper/servers`
+- `GET /api/landscapes/details`
+- `GET /api/groups`
+- `POST /api/groups`
+- `PUT /api/servers/<server_id>/group`
 
 ## Repository Layout
 
-- `app.py` — Flask web dashboard for managing multiple UDP sniffer instances.
-- `sniffAndDecodeUDP_toExpress_viaFlask.py` — main sniffer/decoder entrypoint.
-- `navicon_bridge.py` — calls 32-bit NaviCon via helper EXE & landscape `.trn` files.
-- `replay_hex_log.py` — offline parser for hex-only logs (uses legacy parser in `scapy_udp_56298_14.py`).
-- `scapy_udp_56298_*.py` — prior analysis scripts and parsers.
-- `Condor3XY2LatLon.exe` — helper executable used by `navicon_bridge.py`.
-- `extra/` — utilities and experiments (including a separate README).
-- `requirements.txt` — Python dependencies for core tools.
-- `DASHBOARD_README.md` — detailed documentation for the Flask dashboard.
-- `QUICKSTART.md` — quick start guide for new users.
+- `app.py` - dashboard UI + API + process management
+- `sniffAndDecodeUDP_toExpress_viaFlask.py` - main sniffer/decoder
+- `navicon_bridge.py` - helper bridge for XY->lat/lon conversion
+- `replay_hex_log.py` - offline replay
+- `tasksGet.py` / `tasksConvert.py` / `tasksUpload.py` - task pipeline
+- `DASHBOARD_README.md` - dashboard-focused documentation
+- `QUICKSTART.md` - short setup guide
+- `extra/` - archived/experimental utilities and legacy variants
