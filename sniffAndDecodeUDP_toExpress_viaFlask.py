@@ -396,7 +396,11 @@ def parse_telemetry_packet(hex_data: str) -> str:
             # Use the landscape-specific TRN file with caching
             global COORD_CACHE, COORD_CACHE_HITS, COORD_CACHE_MISSES
             t_start = time_module.time()
-            
+
+            # Skip conversion for zero/near-zero coords (invalid game state)
+            if decoded["pos_x"] <= 0 or decoded["pos_y"] <= 0:
+                return None
+
             # Round coordinates to cache precision (10m grid)
             x_rounded = round(decoded["pos_x"] / COORD_CACHE_PRECISION) * COORD_CACHE_PRECISION
             y_rounded = round(decoded["pos_y"] / COORD_CACHE_PRECISION) * COORD_CACHE_PRECISION
